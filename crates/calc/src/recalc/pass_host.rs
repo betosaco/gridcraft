@@ -65,6 +65,7 @@ pub(super) struct PassHost<'a> {
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
     pub(super) work: Option<crate::WorkHook>,
+    simulation: Option<crate::SimulationHook>,
 }
 
 impl<'a> PassHost<'a> {
@@ -73,6 +74,7 @@ impl<'a> PassHost<'a> {
         PassHost {
             wb,
             work: crate::WorkHook::current(),
+            simulation: crate::SimulationHook::current(),
             exprs,
             results: HashMap::with_capacity_and_hasher(exprs.len(), Default::default()),
             pending: exprs.keys().copied().collect(),
@@ -576,5 +578,10 @@ impl Host for PassHost<'_> {
         x ^= x >> 27;
         *self.rng = x;
         (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// Uses the pass-captured simulation host rather than calc's unrelated volatile RNG.
+    fn simulation(&mut self, sheet: usize, cell: CellRef, request: crate::SimulationRequest<'_>) -> Option<Value> {
+        self.simulation.as_ref().map(|hook| hook.sample(crate::SimulationSite { sheet, cell }, request))
     }
 }

@@ -180,3 +180,12 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
+
+### Seeded worksheet simulation extension
+
+The [Monte Carlo process contract](monte-carlo-processes.md) adds neutral scalar requests in L1
+`Ctx::simulation` and a scoped L2 `SimulationHook` captured once per calculation pass. L5 owns
+all numerical samplers, SplitMix64 streams, stationary AR1 paths, bounded caches and failure
+latches. No functions-to-engine dependency or second RNG is introduced. Every trial drops its
+sampling scope before publication/source recalculation. Volatile MC functions seed the dirty
+closure even without a dependency on a sampled input.

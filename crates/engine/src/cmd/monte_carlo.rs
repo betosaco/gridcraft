@@ -12,8 +12,10 @@ use serde_json::{Value as Json, json};
 use super::whatif::Trial;
 use super::{CommandSpec, EngineError, Result, Session, Workbook, bad, cmd, edit, has_doc, split_sheet, str_param};
 
+mod discrete;
 mod sampling;
 mod statistics;
+mod stochastic;
 use sampling::Plan;
 use statistics::Diagnostics;
 
@@ -30,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Monte Carlo…",
         ["Data", "Analysis"],
         None,
-        "{inputs: [{cell: \"Inputs!B2\", distribution: uniform|triangular|normal, min?, mode?, max?, mean?, stdDev?}], outputs: [\"Model!F30\", ..], iterations?: 1000 (2–100000, ≤1000000 sampled cells), seed?: 0, samples?: true, maxWork?: positive integer ≤ 100000000, newSheet?: name, method?: random|latinHypercube, replicates?: 1 (LHS default 8, at least 2), correlation?: [[1,0.5],[0.5,1]] (Gaussian latent correlation, input order)}. Includes Monte Carlo error estimates and convergence; formula outputs are recalculated on isolated workbook copies. Creates a static report with P10/P50/P90, probability > 0, samples and a conditional Monte Carlo tornado for the first output. Source inputs remain unchanged. Seed controls input sampling, not volatile formulas.",
+        "{inputs: [{cell: \"Inputs!B2\", distribution: uniform|triangular|normal|lognormal|poisson|binomial|hypergeometric, min?, mode?, max?, mean?, stdDev?, cv?, trials?, probability?, draws?, successes?, population?}], outputs: [\"Model!F30\", ..], iterations?: 1000 (2–100000, ≤1000000 sampled cells), seed?: 0, samples?: true, maxWork?: positive integer ≤ 100000000, newSheet?: name, method?: random|latinHypercube, replicates?: 1 (LHS default 8, at least 2), correlation?: [[1,0.5],[0.5,1]] (Gaussian latent correlation, input order)}. Includes Monte Carlo error estimates and convergence; formula outputs are recalculated on isolated workbook copies. Creates a static report with P10/P50/P90, probability > 0, samples and a conditional Monte Carlo tornado for the first output. Source inputs remain unchanged. Seed controls inputs and MC.* worksheet streams (stochasticVersion 1), not RAND/NOW. Lognormal uses arithmetic mean and CV; conditional counts and stationary AR1 use MC.* formulas.",
         has_doc,
         run
     )]
@@ -41,11 +43,20 @@ enum Distribution {
     Uniform(f64, f64),
     Triangular(f64, f64, f64),
     Normal(f64, f64),
+    Lognormal(f64, f64),
+    Poisson(f64),
+    Binomial(u64, f64),
+    Hypergeometric(u64, u64, u64),
 }
 
 /// SplitMix64, as used by the evolutionary solver; no platform RNG or new dependency.
 struct Rng(u64);
 impl Rng {
+    /// Shares the existing Box–Muller transform with conditional processes without another RNG.
+    fn normal(&mut self) -> f64 {
+        let u = self.uniform();
+        (-2.0 * (1.0 - u).ln()).sqrt() * (std::f64::consts::TAU * self.uniform()).cos()
+    }
     /// Advances SplitMix64 with wrapping arithmetic so the seed sequence is platform independent.
     fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -103,12 +114,60 @@ impl Distribution {
                 }
                 Ok(Self::Normal(m, sd))
             }
-            _ => Err(bad(CMD, "distribution must be uniform, triangular or normal")),
+            "lognormal" => {
+                let (mean, cv) = (num("mean")?, num("cv")?);
+                stochastic::lognormal(mean, cv, 0.0)?;
+                Ok(Self::Lognormal(mean, cv))
+            }
+            "poisson" => {
+                let mean = num("mean")?;
+                if !(0.0..=discrete::MAX_POISSON_MEAN).contains(&mean) {
+                    return Err(bad(CMD, "Poisson mean must be between 0 and 50000"));
+                }
+                Ok(Self::Poisson(mean))
+            }
+            "binomial" => {
+                let trials = count_parameter(p, "trials")?;
+                let probability = num("probability")?;
+                if !(0.0..=1.0).contains(&probability)
+                    || ((0.0..1.0).contains(&probability) && probability > 0.0 && trials.saturating_add(1) > discrete::MAX_SUPPORT)
+                {
+                    return Err(bad(CMD, "binomial requires probability 0..1 and at most 100000 nondegenerate outcomes"));
+                }
+                Ok(Self::Binomial(trials, probability))
+            }
+            "hypergeometric" => {
+                let draws = count_parameter(p, "draws")?;
+                let successes = count_parameter(p, "successes")?;
+                let population = count_parameter(p, "population")?;
+                if draws > population || successes > population {
+                    return Err(bad(CMD, "hypergeometric draws/successes cannot exceed population"));
+                }
+                let low = draws.saturating_sub(population - successes);
+                if draws.min(successes).saturating_sub(low).saturating_add(1) > discrete::MAX_SUPPORT {
+                    return Err(bad(CMD, "hypergeometric support exceeds 100000 outcomes"));
+                }
+                Ok(Self::Hypergeometric(draws, successes, population))
+            }
+            _ => Err(bad(CMD, "distribution must be uniform, triangular, normal, lognormal, poisson, binomial or hypergeometric")),
+        }
+    }
+    /// Builds reusable discrete inverse tables only within the charged sampling phase.
+    fn prepare(&self) -> Result<Option<discrete::QuantileTable>> {
+        match *self {
+            Self::Poisson(mean) => discrete::QuantileTable::poisson(mean).map(Some),
+            Self::Binomial(n, p) => discrete::QuantileTable::binomial(n, p).map(Some),
+            Self::Hypergeometric(n, k, total) => discrete::QuantileTable::hypergeometric(n, k, total).map(Some),
+            _ => Ok(None),
         }
     }
     /// Maps a driving probability in `[0, 1]` to this marginal; normal endpoints are
     /// clamped by the shared inverse-normal helper. Non-finite results are errors.
-    fn inverse_cdf(&self, u: f64) -> Result<f64> {
+    fn inverse_cdf(&self, u: f64, prepared: Option<&discrete::QuantileTable>) -> Result<f64> {
+        if let Some(table) = prepared {
+            // A Gaussian CDF can round to1; the discrete driver remains in its open upper domain.
+            return table.quantile(u.min(1.0 - f64::EPSILON / 2.0));
+        }
         let x = match *self {
             Self::Uniform(a, b) => a + (b - a) * u,
             Self::Triangular(a, _, b) if a == b => a,
@@ -118,14 +177,19 @@ impl Distribution {
                 if u < cut { a + w * (u * cut).sqrt() } else { b - w * ((1.0 - u) * (1.0 - cut)).sqrt() }
             }
             Self::Normal(m, sd) => m + sd * sampling::normal_inverse(u)?,
+            Self::Lognormal(mean, cv) => return stochastic::lognormal(mean, cv, sampling::normal_inverse(u)?),
+            Self::Poisson(_) | Self::Binomial(_, _) | Self::Hypergeometric(_, _, _) => return Err(bad(CMD, "missing prepared discrete marginal")),
         };
         if x.is_finite() { Ok(x) } else { Err(bad(CMD, "distribution produced a non-finite value")) }
     }
     /// Draws an independent marginal sample, using Box–Muller for normals.
     /// The caller validates finiteness before applying the value to a workbook trial.
-    fn sample(&self, rng: &mut Rng) -> f64 {
+    fn sample(&self, rng: &mut Rng, prepared: Option<&discrete::QuantileTable>) -> Result<f64> {
         let u = rng.uniform();
-        match *self {
+        if let Some(table) = prepared {
+            return table.quantile(u);
+        }
+        let x = match *self {
             Self::Uniform(a, b) => a + (b - a) * u,
             Self::Triangular(a, _, b) if a == b => a,
             Self::Triangular(a, m, b) => {
@@ -135,8 +199,22 @@ impl Distribution {
                 if u < mode { a + width * (u * mode).sqrt() } else { b - width * ((1.0 - u) * (1.0 - mode)).sqrt() }
             }
             Self::Normal(m, sd) => m + sd * (-2.0 * (1.0 - u).ln()).sqrt() * (std::f64::consts::TAU * rng.uniform()).cos(),
-        }
+            Self::Lognormal(mean, cv) => {
+                return stochastic::lognormal(mean, cv, (-2.0 * (1.0 - u).ln()).sqrt() * (std::f64::consts::TAU * rng.uniform()).cos());
+            }
+            Self::Poisson(_) | Self::Binomial(_, _) | Self::Hypergeometric(_, _, _) => return Err(bad(CMD, "missing prepared discrete marginal")),
+        };
+        Ok(x)
     }
+}
+
+/// Count marginals never truncate fractional JSON values or exceed exact, bounded populations.
+fn count_parameter(p: &Json, key: &str) -> Result<u64> {
+    p.get(key)
+        .and_then(Json::as_f64)
+        .filter(|n| n.is_finite() && *n >= 0.0 && *n <= discrete::MAX_POPULATION as f64 && n.fract() == 0.0)
+        .map(|n| n as u64)
+        .ok_or_else(|| bad(CMD, format!("{key} must be a whole count between 0 and 1000000000")))
 }
 
 struct Input {
@@ -283,6 +361,8 @@ pub(crate) struct Job {
     finish_work: u64,
     report_cells: usize,
     work_limit: u64,
+    stochastic: stochastic::Stats,
+    sheet_names: Arc<Vec<String>>,
 }
 
 impl Job {
@@ -311,6 +391,9 @@ impl Job {
             return Err(bad(CMD, "too many sampled cells (at most 1000000)"));
         }
         let seed = integer(p, "seed", 0, u64::MAX)?;
+        if integer(p, "stochasticVersion", 1, 1)? != 1 {
+            return Err(bad(CMD, "stochasticVersion must be 1"));
+        }
         let keep_samples = match p.get("samples") {
             None => true,
             Some(v) => v.as_bool().ok_or_else(|| bad(CMD, "samples must be a boolean"))?,
@@ -353,6 +436,7 @@ impl Job {
         if let Some(c) = config.as_object_mut() {
             c.remove("newSheet");
             c.insert("seed".into(), json!(seed));
+            c.insert("stochasticVersion".into(), json!(1));
             c.insert("iterations".into(), json!(iterations));
             let canonical = raw_inputs
                 .iter()
@@ -420,6 +504,8 @@ impl Job {
             finish_work,
             report_cells,
             work_limit,
+            stochastic: stochastic::Stats::default(),
+            sheet_names: Arc::new(d.wb.sheets.iter().map(|sheet| sheet.name.clone()).collect()),
         })
     }
 
@@ -480,7 +566,14 @@ impl Job {
                 .zip(xs)
                 .map(|(i, values)| (i.sheet, i.cell, Value::Number(values.get(k).copied().unwrap_or(0.0))))
                 .collect::<Vec<_>>();
-            let values = self.trial.run(&sets, &reads)?;
+            let runtime = stochastic::Runtime::new(self.seed, k as u64, self.sheet_names.clone());
+            let values = {
+                let _simulation = runtime.hook().enter().ok_or_else(|| bad(CMD, "cannot enter stochastic sampling scope"))?;
+                let values = self.trial.run(&sets, &reads)?;
+                runtime.check()?;
+                values
+            };
+            self.stochastic.add(runtime.stats());
             for ((output, column), value) in self.outputs.iter().zip(&mut self.ys).zip(values) {
                 match value {
                     Value::Number(n) if n.is_finite() => column.push(n),
@@ -502,7 +595,23 @@ impl Job {
         if !self.ready() {
             return Err(bad(CMD, "analysis is not ready to publish"));
         }
-        let Self { name, config, seed, iterations, keep_samples, inputs, outputs, plan, xs, ys, mut trial, finish_work, report_cells, .. } = self;
+        let Self {
+            name,
+            config,
+            seed,
+            iterations,
+            keep_samples,
+            inputs,
+            outputs,
+            plan,
+            xs,
+            ys,
+            mut trial,
+            finish_work,
+            report_cells,
+            stochastic,
+            ..
+        } = self;
         let _scope = trial.meter.hook().enter().ok_or_else(|| bad(CMD, "cannot enter finalization work scope"))?;
         trial.charge(finish_work)?;
         let xs = xs.ok_or_else(|| bad(CMD, "missing samples"))?;
@@ -578,13 +687,14 @@ impl Job {
                 summaries: &summaries,
                 sensitivity: &sensitivity,
                 diagnostics: &diagnostics,
+                stochastic,
             },
         );
         trial.meter.cancellation.complete();
         trial.check()?;
         publication?;
         Ok(
-            json!({"sheet":name,"iterations":iterations,"seed":seed,"static":true,"independentInputs":plan.independent(),"sampling":plan.method_name(),"replicates":plan.replicates,"accuracy":diagnostics.accuracy_json(),"convergence":diagnostics.first_trace_json(),"config":config,"outputs":summaries.iter().map(Summary::json).collect::<Vec<_>>(),"tornadoOutput":outputs.first().map(|o|&o.label),"tornado":sensitivity.iter().map(Sensitivity::json).collect::<Vec<_>>()}),
+            json!({"sheet":name,"iterations":iterations,"seed":seed,"static":true,"independentInputs":plan.independent(),"sampling":plan.method_name(),"stochastic":stochastic.json(),"replicates":plan.replicates,"accuracy":diagnostics.accuracy_json(),"convergence":diagnostics.first_trace_json(),"config":config,"outputs":summaries.iter().map(Summary::json).collect::<Vec<_>>(),"tornadoOutput":outputs.first().map(|o|&o.label),"tornado":sensitivity.iter().map(Sensitivity::json).collect::<Vec<_>>()}),
         )
     }
 }
@@ -612,13 +722,14 @@ struct Report<'a> {
     summaries: &'a [Summary],
     sensitivity: &'a [Sensitivity],
     diagnostics: &'a Diagnostics,
+    stochastic: stochastic::Stats,
 }
 
 /// Publishes summary, conditional sensitivity, diagnostics, optional samples and two native
 /// charts in one report-sheet edit. The report becomes active and retains canonical rerun
 /// parameters; the original model's input values and formulas are preserved.
 fn write_report(s: &mut Session, report: Report<'_>) -> Result<()> {
-    let Report { name, config, seed, iterations, keep_samples, inputs, outputs, xs, ys, summaries, sensitivity, diagnostics } = report;
+    let Report { name, config, seed, iterations, keep_samples, inputs, outputs, xs, ys, summaries, sensitivity, diagnostics, stochastic } = report;
     let chart_id = s.doc()?.wb.next_object_id();
     let si = edit(s, |cx| {
         let mut sheet = Sheet::new(name.to_string());
@@ -635,9 +746,16 @@ fn write_report(s: &mut Session, report: Report<'_>) -> Result<()> {
             ),
             StyleId::DEFAULT,
         );
-        put(2, 0, Value::text(format!("Iterations: {iterations}; seed: {seed}. Seed controls inputs, not volatile formulas.")), StyleId::DEFAULT);
+        put(
+            2,
+            0,
+            Value::text(format!("Iterations: {iterations}; seed: {seed}. Seed controls inputs and MC.* streams v1; not RAND/NOW.")),
+            StyleId::DEFAULT,
+        );
         put(3, 0, Value::text("Reusable configuration (JSON)"), bold);
         put(3, 1, Value::text(config.to_string()), StyleId::DEFAULT);
+        put(4, 0, Value::text("Seeded worksheet sampling"), bold);
+        put(4, 1, Value::text(stochastic.json().to_string()), StyleId::DEFAULT);
         for (c, h) in ["Output", "Mean", "Sample standard deviation", "Minimum", "P10", "P50", "P90", "Maximum", "Probability > 0"].iter().enumerate()
         {
             put(5, c as u32, Value::text(*h), bold);

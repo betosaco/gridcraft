@@ -12,7 +12,10 @@ or financial-model template is required.
 1. Add each uncertain input cell. Use a sheet-qualified reference for another sheet, such as
    `'Sales assumptions'!B2`. The input must be a numeric constant, not a formula.
 2. Choose a distribution: **uniform** (minimum/maximum), **triangular**
-   (minimum/mode/maximum), or **normal** (mean/standard deviation).
+   (minimum/mode/maximum), **normal** (mean/standard deviation), **lognormal**
+   (arithmetic mean/CV), **Poisson** (mean), **binomial** (trials/probability), or
+   **hypergeometric** (draws/successes/population). See [seeded worksheet processes](monte-carlo-processes.md)
+   for conditional counts, stationary AR1, numerical limits and the explicit deterministic forecast guard.
 3. Enter output cells, one per line. They may be on different sheets. Outputs must evaluate to
    finite numbers in every trial.
 4. Choose random Monte Carlo or Latin Hypercube sampling (LHS), total iterations, and a
@@ -133,11 +136,13 @@ References (mathematical descriptions, no implementation code copied):
 
 ## Limits and reproducibility
 
-- Discrete distributions, non-Gaussian copulas and percentile fan charts are future work.
+- Non-Gaussian copulas and percentile fan charts are future work. Discrete marginals and
+  conditional count/AR1 worksheet functions are native; see the [process contract](monte-carlo-processes.md).
   The report supports up to 64 formula outputs for monthly forecasts.
 - At most 32 inputs, 64 outputs, 2–100,000 iterations, and 1,000,000 input/output sample cells.
   Limits apply even when the sample table is omitted. Large formula models may take time.
-- The seed controls the input RNG. Workbook formulas such as `RAND`/`NOW`, external data and
+- The seed controls the input RNG and versioned `MC.*` worksheet streams. See
+  [counts and AR1](monte-carlo-processes.md) for stream identity and process limits. Workbook formulas such as `RAND`/`NOW`, external data and
   floating-point platform differences are outside that reproducibility contract. Use
   deterministic formulas when reproducibility matters.
 - What-if trials always recalculate, including in manual calculation mode, without changing the
@@ -244,6 +249,10 @@ terminal rollback and cancellation/publication ordering. External services are n
 unsupported `WEBSERVICE`/`FILTERXML` calls remain worksheet errors rather than network requests.
 
 ## Revision history
+
+- 2026-10-29: bill sparse spill traversal by the key interval actually scanned, with a bounded recalculation regression.
+
+- 2026-10-28: extend native marginals and document seeded conditional counts/stationary AR1.
 
 | Date | Change |
 | --- | --- |

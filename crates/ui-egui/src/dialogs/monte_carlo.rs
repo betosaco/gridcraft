@@ -19,6 +19,46 @@ fn text(ui: &mut egui::Ui, values: &mut Map<String, Json>, key: &str, label: &st
     });
 }
 
+/// Names distributions without presenting log-space parameters as arithmetic moments.
+fn distribution_label(kind: &str) -> &str {
+    match kind {
+        "uniform" => "Uniform",
+        "triangular" => "Triangular",
+        "normal" => "Normal",
+        "lognormal" => "Lognormal (arithmetic mean / CV)",
+        "poisson" => "Poisson count",
+        "binomial" => "Binomial count",
+        "hypergeometric" => "Hypergeometric count",
+        _ => kind,
+    }
+}
+
+/// Lists scalar parameters and defaults; existing values survive distribution changes.
+fn distribution_fields(kind: &str) -> &'static [(&'static str, &'static str, &'static str)] {
+    match kind {
+        "normal" => &[("mean", "Mean:", "0"), ("stdDev", "Standard deviation:", "1")],
+        "lognormal" => &[("mean", "Arithmetic mean:", "1"), ("cv", "CV (SD / mean):", "0.1")],
+        "poisson" => &[("mean", "Mean events:", "10")],
+        "binomial" => &[("trials", "Trials (integer):", "10"), ("probability", "Success probability:", "0.5")],
+        "hypergeometric" => {
+            &[("draws", "Draws (integer):", "10"), ("successes", "Population successes:", "20"), ("population", "Population size:", "100")]
+        }
+        "triangular" => &[("min", "Minimum:", "0"), ("mode", "Mode:", "0.5"), ("max", "Maximum:", "1")],
+        _ => &[("min", "Minimum:", "0"), ("max", "Maximum:", "1")],
+    }
+}
+
+/// Renders distribution-specific controls without replacing invalid user-entered values.
+fn input_parameters(ui: &mut egui::Ui, values: &mut Map<String, Json>) {
+    let fields = distribution_fields(values.get("distribution").and_then(Json::as_str).unwrap_or("uniform"));
+    ui.horizontal_wrapped(|ui| {
+        for &(key, label, default) in fields {
+            values.entry(key.to_string()).or_insert_with(|| json!(default));
+            text(ui, values, key, label);
+        }
+    });
+}
+
 /// Draws the bounded input editor, sampling settings, matrix and outputs without evaluating
 /// formulas. Replica settings apply only to LHS; confirmation delegates validation to the engine.
 pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
@@ -38,10 +78,10 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
                             let mut kind = values.get("distribution").and_then(Json::as_str).unwrap_or("uniform").to_string();
                             let label = ui.label("Distribution:");
                             craft_ui::ComboBox::from_id_salt("distribution")
-                                .selected_text(&kind)
+                                .selected_text(distribution_label(&kind))
                                 .show_ui(ui, |ui| {
-                                    for k in ["uniform", "triangular", "normal"] {
-                                        ui.selectable_value(&mut kind, k.to_string(), k);
+                                    for k in ["uniform", "triangular", "normal", "lognormal", "poisson", "binomial", "hypergeometric"] {
+                                        ui.selectable_value(&mut kind, k.to_string(), distribution_label(k));
                                     }
                                 })
                                 .response
@@ -51,20 +91,7 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
                                 remove = Some(index);
                             }
                         });
-                        if values.get("distribution").and_then(Json::as_str) == Some("normal") {
-                            ui.horizontal(|ui| {
-                                text(ui, values, "mean", "Mean:");
-                                text(ui, values, "stdDev", "Standard deviation:");
-                            });
-                        } else {
-                            ui.horizontal(|ui| {
-                                text(ui, values, "min", "Minimum:");
-                                if values.get("distribution").and_then(Json::as_str) == Some("triangular") {
-                                    text(ui, values, "mode", "Mode:");
-                                }
-                                text(ui, values, "max", "Maximum:");
-                            });
-                        }
+                        input_parameters(ui, values);
                     }
                 });
             });
@@ -77,6 +104,7 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
         inputs.push(json!({"cell":"","distribution":"uniform","min":"0","mode":"0.5","max":"1","mean":"0","stdDev":"1"}));
     }
     d.values.insert("inputs".into(), json!(inputs));
+    ui.label("For conditional counts and monthly AR1 processes, use MC.* worksheet functions with IF(MC.ACTIVE(), sample, baseline).");
     ui.separator();
     ui.horizontal(|ui| {
         let label = ui.label("Sampling:");
@@ -146,7 +174,7 @@ pub(super) fn params(d: &Dialog) -> Json {
     if let Some(inputs) = values.get_mut("inputs").and_then(Json::as_array_mut) {
         for input in inputs {
             if let Some(input) = input.as_object_mut() {
-                for key in ["min", "mode", "max", "mean", "stdDev"] {
+                for key in ["min", "mode", "max", "mean", "stdDev", "cv", "trials", "probability", "draws", "successes", "population"] {
                     if let Some(n) = input.get(key).and_then(Json::as_str).and_then(|s| s.trim().parse::<f64>().ok()).filter(|n| n.is_finite()) {
                         input.insert(key.into(), json!(n));
                     }
@@ -183,6 +211,54 @@ pub(super) fn params(d: &Dialog) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every added distribution reaches the engine with numeric parameters, including whitespace.
+    #[test]
+    fn monte_carlo_dialog_serializes_discrete_and_lognormal_parameters() {
+        let d = Dialog::custom(
+            "monteCarlo",
+            "Monte Carlo",
+            json!({"inputs":[
+                {"cell":"A1","distribution":"lognormal","mean":" 120 ","cv":"0.25"},
+                {"cell":"A2","distribution":"poisson","mean":"12.5"},
+                {"cell":"A3","distribution":"binomial","trials":" 40 ","probability":"0.3"},
+                {"cell":"A4","distribution":"hypergeometric","draws":"10","successes":"20","population":"100"}
+            ]}),
+        );
+        let p = params(&d);
+        assert_eq!(p["inputs"][0]["distribution"], "lognormal");
+        assert_eq!(p["inputs"][0]["mean"], 120.0);
+        assert_eq!(p["inputs"][0]["cv"], 0.25);
+        assert_eq!(p["inputs"][1]["mean"], 12.5);
+        assert_eq!(p["inputs"][2]["trials"], 40.0);
+        assert_eq!(p["inputs"][2]["probability"], 0.3);
+        assert_eq!(p["inputs"][3]["draws"], 10.0);
+        assert_eq!(p["inputs"][3]["successes"], 20.0);
+        assert_eq!(p["inputs"][3]["population"], 100.0);
+    }
+
+    /// Fractions are never truncated into valid counts; invalid text and nonfinite values remain visible to validation.
+    #[test]
+    fn monte_carlo_dialog_preserves_invalid_new_distribution_parameters() {
+        let d = Dialog::custom(
+            "monteCarlo",
+            "Monte Carlo",
+            json!({"inputs":[
+                {"distribution":"binomial","trials":"3.5","probability":"bad"},
+                {"distribution":"hypergeometric","draws":"1.25","successes":"NaN","population":"inf"},
+                {"distribution":"lognormal","mean":"-1","cv":"overflow"}
+            ]}),
+        );
+        let p = params(&d);
+        assert_eq!(p["inputs"][0]["trials"], 3.5);
+        assert_eq!(p["inputs"][0]["probability"], "bad");
+        assert_eq!(p["inputs"][1]["draws"], 1.25);
+        assert_eq!(p["inputs"][1]["successes"], "NaN");
+        assert_eq!(p["inputs"][1]["population"], "inf");
+        assert_eq!(p["inputs"][2]["mean"], -1.0);
+        assert_eq!(p["inputs"][2]["cv"], "overflow");
+    }
+
     /// Invalid numeric text must survive UI conversion so the engine can report it to the user.
     #[test]
     fn monte_carlo_dialog_builds_typed_params_without_hiding_invalid_input() {

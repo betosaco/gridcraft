@@ -90,6 +90,10 @@ pub(crate) fn stack_position() -> usize {
 
 /// What the evaluator needs from its surroundings.
 pub trait Host {
+    /// Optional seeded simulation service. Ordinary calculation has no sampling context.
+    fn simulation(&mut self, _sheet: usize, _cell: CellRef, _request: crate::SimulationRequest<'_>) -> Option<Value> {
+        None
+    }
     /// Default-compatible checkpoint for hosts without an execution policy.
     fn charge_work(&mut self, _units: u64) -> bool {
         true
@@ -154,6 +158,11 @@ struct FnCtx<'a, 'h> {
 }
 
 impl Ctx for FnCtx<'_, '_> {
+    /// Supplies the physical formula identity while keeping sampler policy out of calc.
+    fn simulation(&mut self, request: crate::SimulationRequest<'_>) -> Option<Value> {
+        self.ev.host.note_volatile();
+        self.ev.host.simulation(self.ev.sheet, self.ev.at, request)
+    }
     /// Native functions/lift charge the same persistent policy as their enclosing formula trial.
     fn charge_work(&mut self, units: u64) -> bool {
         self.ev.host.charge_work(units)
