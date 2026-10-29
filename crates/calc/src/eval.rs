@@ -90,6 +90,10 @@ pub(crate) fn stack_position() -> usize {
 
 /// What the evaluator needs from its surroundings.
 pub trait Host {
+    /// Optional seeded simulation service. Ordinary calculation has no sampling context.
+    fn simulation(&mut self, _sheet: usize, _cell: CellRef, _request: crate::SimulationRequest<'_>) -> Option<Value> {
+        None
+    }
     /// Default-compatible checkpoint for hosts without an execution policy.
     fn charge_work(&mut self, _units: u64) -> bool {
         true
@@ -154,6 +158,11 @@ struct FnCtx<'a, 'h> {
 }
 
 impl Ctx for FnCtx<'_, '_> {
+    /// Supplies the physical formula identity while keeping sampler policy out of calc.
+    fn simulation(&mut self, request: crate::SimulationRequest<'_>) -> Option<Value> {
+        self.ev.host.note_volatile();
+        self.ev.host.simulation(self.ev.sheet, self.ev.at, request)
+    }
     /// Native functions/lift charge the same persistent policy as their enclosing formula trial.
     fn charge_work(&mut self, units: u64) -> bool {
         self.ev.host.charge_work(units)
@@ -262,6 +271,9 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// Materializes a bounded reference, preserving its shape and ordinary error-valued cells.
+    /// A short one-error host reply signals a refused read and propagates that error;
+    /// other shape mismatches are #VALUE!, rather than constructing a malformed array.
     pub fn area_value(&mut self, a: &Area) -> Value {
         if a.range.is_single() {
             return self.host.cell_value(a.sheet, a.range.start);
@@ -279,6 +291,12 @@ impl<'h> Evaluator<'h> {
             return Value::Error(CellError::Num);
         }
         let data = self.host.range_values(a.sheet, range);
+        if data.len() != h.saturating_mul(w) {
+            return match data.as_slice() {
+                [Value::Error(error)] => Value::Error(*error),
+                _ => Value::Error(CellError::Value),
+            };
+        }
         Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
     }
 
@@ -696,5 +714,95 @@ mod fuel_tests {
         // A flat helper map keeps working (3 of 3 invokes inside the budget).
         let r = eval_with(3, "=MAP({1,2,3},LAMBDA(x,x*2))");
         assert!(matches!(r, Value::Array(_)) && !matches!(&r, Value::Array(a) if a.data.iter().any(|v| matches!(v, Value::Error(_)))), "{r:?}");
+    }
+
+    #[cfg(test)]
+    mod range_refusal_tests {
+        use gridcraft_core::{CellError, CellRef, RangeRef, Value};
+        use gridcraft_model::{Cell, Workbook};
+
+        use crate::eval::{Evaluator, Host};
+
+        struct RangeReply {
+            wb: Workbook,
+            values: Vec<Value>,
+            scalar: Value,
+        }
+
+        impl RangeReply {
+            /// Keep the requested 2x2 range inside the used range even for malformed host replies.
+            fn new(values: Vec<Value>) -> Self {
+                let mut wb = Workbook::new();
+                wb.sheet_mut(0).unwrap().cells.set(CellRef::new(1, 1), Cell::value(Value::Number(1.0)));
+                Self { wb, values, scalar: Value::Empty }
+            }
+        }
+
+        impl Host for RangeReply {
+            fn workbook(&self) -> &Workbook {
+                &self.wb
+            }
+            fn cell_value(&mut self, _sheet: usize, _cell: CellRef) -> Value {
+                self.scalar.clone()
+            }
+            fn range_values(&mut self, _sheet: usize, _range: RangeRef) -> Vec<Value> {
+                self.values.clone()
+            }
+            fn now_serial(&self) -> f64 {
+                0.0
+            }
+            fn random(&mut self) -> f64 {
+                0.0
+            }
+        }
+
+        fn evaluate_reply(values: Vec<Value>, formula: &str) -> Value {
+            let mut host = RangeReply::new(values);
+            let expr = gridcraft_formula::parser::parse(formula).unwrap();
+            Evaluator::new(&mut host, 0, CellRef::new(0, 3)).value(&expr)
+        }
+
+        /// Error sentinels from refused reads must survive shape validation and TRIMRANGE.
+        #[test]
+        fn refused_range_reads_preserve_singleton_error_sentinels() {
+            for error in [CellError::Num, CellError::NA, CellError::Div0, CellError::Value] {
+                for formula in ["=A1:B2", "=TRIMRANGE(A1:B2)"] {
+                    assert_eq!(evaluate_reply(vec![Value::Error(error)], formula), Value::Error(error), "{formula}");
+                }
+            }
+        }
+
+        /// Other host shape violations remain #VALUE!, including empty and oversized replies.
+        #[test]
+        fn malformed_range_reads_return_value_errors() {
+            for values in [vec![], vec![Value::Number(9.0)], vec![Value::Error(CellError::Num), Value::Empty], vec![Value::Empty; 5]] {
+                for formula in ["=A1:B2", "=TRIMRANGE(A1:B2)"] {
+                    assert_eq!(evaluate_reply(values.clone(), formula), Value::Error(CellError::Value), "{formula}: {values:?}");
+                }
+            }
+        }
+
+        /// A legitimate error inside a correctly sized array is a cell value, not a read failure.
+        #[test]
+        fn correctly_shaped_range_errors_remain_cell_values() {
+            let values = vec![Value::Number(1.0), Value::Empty, Value::Error(CellError::Num), Value::Number(2.0)];
+            for formula in ["=A1:B2", "=TRIMRANGE(A1:B2)"] {
+                let value = evaluate_reply(values.clone(), formula);
+                let Value::Array(array) = value else { panic!("{formula}: {value:?}") };
+                assert_eq!((array.rows, array.cols), (2, 2));
+                assert_eq!(array.data, values);
+            }
+        }
+
+        /// A genuine 1x1 error has the requested shape and keeps its ordinary reference behavior.
+        #[test]
+        fn legitimate_single_cell_errors_are_unchanged() {
+            for formula in ["=A1", "=TRIMRANGE(A1:A1)"] {
+                let mut host = RangeReply::new(vec![Value::Error(CellError::Num)]);
+                host.scalar = Value::Error(CellError::Num);
+                let expr = gridcraft_formula::parser::parse(formula).unwrap();
+                assert_eq!(Evaluator::new(&mut host, 0, CellRef::new(0, 3)).value(&expr), Value::Error(CellError::Num));
+            }
+        }
     }
 }

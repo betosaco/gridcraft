@@ -86,14 +86,15 @@ impl Plan {
         let d = inputs.len();
         let total = n * self.replicates;
         let mut rng = Rng(seed);
+        let prepared = inputs.iter().map(|input| input.distribution.prepare()).collect::<Result<Vec<_>>>()?;
         let mut xs = (0..d).map(|_| Vec::with_capacity(total)).collect::<Vec<_>>();
         if !self.latin && self.factor.is_none() {
             for row in 0..total {
                 if row.is_multiple_of(128) && !gridcraft_calc::WorkHook::allowed() {
                     return Err(bad(CMD, "sampling stopped by work limit or cancellation"));
                 }
-                for (input, column) in inputs.iter().zip(&mut xs) {
-                    let x = input.distribution.sample(&mut rng);
+                for ((input, table), column) in inputs.iter().zip(&prepared).zip(&mut xs) {
+                    let x = input.distribution.sample(&mut rng, table.as_ref())?;
                     if !x.is_finite() {
                         return Err(bad(CMD, "non-finite sampled value"));
                     }
@@ -136,10 +137,13 @@ impl Plan {
                         let correlated = row.iter().zip(&z).map(|(a, z)| a * z).sum::<f64>();
                         match input.distribution {
                             Distribution::Normal(m, sd) => m + sd * correlated,
-                            _ => input.distribution.inverse_cdf(normal_cdf(correlated)?)?,
+                            Distribution::Lognormal(mean, cv) => super::stochastic::lognormal(mean, cv, correlated)?,
+                            _ => input.distribution.inverse_cdf(normal_cdf(correlated)?, prepared.get(i).and_then(Option::as_ref))?,
                         }
                     } else {
-                        input.distribution.inverse_cdf(uniforms.get(i).and_then(|c| c.get(k)).copied().unwrap_or(0.5))?
+                        input
+                            .distribution
+                            .inverse_cdf(uniforms.get(i).and_then(|c| c.get(k)).copied().unwrap_or(0.5), prepared.get(i).and_then(Option::as_ref))?
                     };
                     if !x.is_finite() {
                         return Err(bad(CMD, "non-finite correlated sample"));

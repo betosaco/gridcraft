@@ -124,7 +124,7 @@ fn monte_carlo_distribution_moments_and_ranks() {
         (Distribution::Triangular(0., 0.5, 1.), 0.5, 1. / 24.),
         (Distribution::Normal(5., 2.), 5., 4.),
     ] {
-        let xs = (0..50000).map(|_| d.sample(&mut rng)).collect::<Vec<_>>();
+        let xs = (0..50000).map(|_| d.sample(&mut rng, None).unwrap()).collect::<Vec<_>>();
         let mean = xs.iter().sum::<f64>() / xs.len() as f64;
         let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / xs.len() as f64;
         assert!((mean - expected_mean).abs() < 0.03);
@@ -265,4 +265,117 @@ fn monte_carlo_correlated_lhs_matches_normal_sum_variance_and_preserves_seed() {
     let (mean, sd) = statistics::moments(&total).unwrap();
     assert!(mean.abs() < 0.01);
     assert!((sd - 3.5_f64.sqrt()).abs() < 0.03);
+}
+
+/// Noise-only cells must enter the dirty closure even without a link to sampled assumptions.
+/// Publication recalculates the ordinary guarded forecast and undo removes only the report.
+#[test]
+fn native_stochastic_formulas_recalculate_and_preserve_the_forecast() {
+    let mut s = model();
+    let formulas = [
+        "=IF(MC.ACTIVE(),MC.POISSON(12,\"leads\"),12)",
+        "=IF(MC.ACTIVE(),MC.BINOMIAL(C1,0.4,\"sales\"),C1*0.4)",
+        "=IF(MC.ACTIVE(),MC.AR1.LOGNORMAL(\"cpl\",24,1,0.1,0.6),1)",
+        "=C1+D1+E1",
+    ];
+    for (column, input) in ["C1", "D1", "E1", "F1"].into_iter().zip(formulas) {
+        s.execute("cell.set", json!({"cell":column,"input":input})).unwrap();
+    }
+    let before = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+    let mut p = params();
+    p["inputs"] = json!([{"cell":"A1","min":10,"max":10}]);
+    p["outputs"] = json!(["C1", "D1", "E1", "F1"]);
+    p["iterations"] = json!(512);
+    let r = s.execute(CMD, p).unwrap();
+    assert!((r["outputs"][0]["mean"].as_f64().unwrap() - 12.0).abs() < 0.7);
+    assert!(r["outputs"][0]["stdDev"].as_f64().unwrap() > 2.5);
+    assert!(r["outputs"][1]["stdDev"].as_f64().unwrap() > 1.0);
+    assert!(r["outputs"][2]["stdDev"].as_f64().unwrap() > 0.07);
+    assert!(r["stochastic"]["countRequests"].as_u64().unwrap() >= 1024);
+    assert!(r["stochastic"]["ar1GeneratedSteps"].as_u64().unwrap() >= 512 * 24);
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap(), &before);
+    assert!(gridcraft_calc::SimulationHook::current().is_none());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap(), &before);
+}
+
+/// Handled sampler errors and invalid arity cannot become apparently successful trial outputs.
+#[test]
+fn native_stochastic_invalid_requests_abort_atomically_despite_iferror() {
+    for formula in [
+        "=IF(MC.ACTIVE(),IFERROR(MC.BINOMIAL(2.5,0.5,\"s\"),7),1)",
+        "=IF(MC.ACTIVE(),IFERROR(MC.POISSON(1),7),1)",
+        "=IF(MC.ACTIVE(),IFERROR(MC.AR1.NORMAL(\"p\",1,0,1,1),7),1)",
+        "=IF(MC.ACTIVE(),IFERROR(MC.POISSON({1,2},\"s\"),7),1)",
+    ] {
+        let s = model();
+        // Imported formulas may bypass the interactive editor's strict arity validation.
+        let mut wb = (*s.doc().unwrap().wb).clone();
+        wb.sheet_mut(0).unwrap().set_cell(CellRef::new(0, 2), Cell::formula(gridcraft_model::Formula::new(formula)));
+        let mut s = Session::new();
+        s.add_document(crate::DocState::new(wb, None, "Imported fixture".into(), crate::Trust::FromFile));
+        let before = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+        let mut p = params();
+        p["iterations"] = json!(2);
+        assert!(s.execute(CMD, p).is_err(), "{formula}");
+        assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+        assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap(), &before);
+        assert!(gridcraft_calc::SimulationHook::current().is_none());
+    }
+}
+
+/// Absolute trial keys make stepped runs identical to synchronous runs, including AR1 paths.
+#[test]
+fn native_stochastic_sync_and_incremental_outputs_match() {
+    fn setup() -> Session {
+        let mut s = model();
+        s.execute("cell.set", json!({"cell":"C1","input":"=IF(MC.ACTIVE(),MC.POISSON(A1,\"n\")+MC.AR1.NORMAL(\"p\",12,0,1,-0.4),A1)"})).unwrap();
+        s
+    }
+    let mut p = params();
+    p["iterations"] = json!(64);
+    p["inputs"] = json!([{"cell":"Sheet1!A1","min":5,"max":15}]);
+    let expected = setup().execute(CMD, p.clone()).unwrap();
+    let mut s = setup();
+    let mut job = Job::prepare(&s, &p).unwrap();
+    while !job.ready() {
+        job.advance(1).unwrap();
+    }
+    let actual = job.publish(&mut s).unwrap();
+    for key in ["outputs", "tornado", "stochastic", "accuracy", "convergence"] {
+        assert_eq!(actual[key], expected[key], "{key}");
+    }
+}
+
+/// New static marginals use the same bounded plan/correlation path and retain integral support.
+#[test]
+fn native_discrete_and_lognormal_marginals_are_reusable_and_validated() {
+    for (distribution, low, high) in [
+        (json!({"distribution":"poisson","mean":8}), 0.0, 100.0),
+        (json!({"distribution":"binomial","trials":20,"probability":0.4}), 0.0, 20.0),
+        (json!({"distribution":"hypergeometric","draws":10,"successes":15,"population":40}), 0.0, 10.0),
+        (json!({"distribution":"lognormal","mean":1,"cv":0.2}), 0.0, 10.0),
+    ] {
+        let mut s = model();
+        s.execute("cell.set", json!({"cell":"C1","input":"=A1"})).unwrap();
+        let mut input = distribution.clone();
+        input["cell"] = json!("A1");
+        let p = json!({"inputs":[input],"outputs":["C1"],"iterations":128,"seed":42,"method":"latinHypercube","replicates":8,"correlation":[[1]]});
+        let first = s.execute(CMD, p.clone()).unwrap();
+        assert!(first["outputs"][0]["min"].as_f64().unwrap() >= low);
+        assert!(first["outputs"][0]["max"].as_f64().unwrap() <= high);
+        s.execute("sheet.activate", json!({"sheet":0})).unwrap();
+        let again = s.execute(CMD, p).unwrap();
+        assert_eq!(first["outputs"], again["outputs"]);
+        assert_eq!(first["config"]["stochasticVersion"], 1);
+    }
+    for distribution in [
+        json!({"distribution":"poisson","mean":50001}),
+        json!({"distribution":"binomial","trials":2.5,"probability":0.5}),
+        json!({"distribution":"hypergeometric","draws":11,"successes":2,"population":10}),
+        json!({"distribution":"lognormal","mean":0,"cv":0.1}),
+    ] {
+        assert!(Distribution::parse(&distribution).is_err());
+    }
 }

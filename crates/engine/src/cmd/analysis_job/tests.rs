@@ -418,3 +418,82 @@ fn running_total_edits_do_not_spend_analysis_allowance() {
     }
     assert_eq!(s.doc().unwrap().analysis_budget.remaining().unwrap(), before);
 }
+
+/// Analysis identities belong to the session, not to workbook snapshots restored by macro previews.
+#[test]
+fn macros_deny_the_analysis_lifecycle_for_local_and_imported_workbooks() {
+    for trust in [crate::Trust::Local, crate::Trust::FromFile] {
+        for id in ["analysis.start", "analysis.status", "analysis.step", "analysis.cancel", "analysis.finish", "analysis.futureOperation"] {
+            assert!(
+                matches!(crate::macros::policy::macro_policy(id, &json!({"job":1}), trust), crate::macros::policy::Policy::Deny(_)),
+                "{trust:?}: {id}"
+            );
+        }
+    }
+}
+
+/// A dry run must refuse lifecycle commands before they can cancel or advance the live job.
+#[test]
+fn checking_a_macro_preserves_the_active_analysis_identity_progress_and_source() {
+    for trust in [crate::Trust::Local, crate::Trust::FromFile] {
+        for id in ["analysis.cancel", "analysis.step"] {
+            let (mut s, params) = fixture();
+            let next_job = s.next_analysis_job + 1;
+            s.execute("macro.save", json!({"name":"AnalysisProbe","steps":[{"type":"command","id":id,"params":{"job":next_job,"trials":1}}]}))
+                .unwrap();
+            s.doc_mut().unwrap().trust = trust;
+            let started = s.execute("analysis.start", json!({"params":params})).unwrap();
+            assert_eq!(started["job"], next_job);
+            let source = s.doc().unwrap().wb.clone();
+            let revision = s.doc().unwrap().revision;
+            let undo = s.doc().unwrap().undo.len();
+            let journal = s.journal.clone();
+            let checked = s.execute("macro.check", json!({"name":"AnalysisProbe"})).unwrap();
+            assert_eq!(checked["ok"], false, "{trust:?}: {id}: {checked}");
+            assert!(checked["errors"].as_array().is_some_and(|errors| {
+                errors.iter().any(|error| error.as_str().is_some_and(|message| message.contains(id) && message.contains("can't run in a macro")))
+            }));
+            assert_eq!(s.analysis_progress(), Some(started.clone()));
+            assert_eq!(s.execute("analysis.status", json!({"job":next_job})).unwrap(), started);
+            assert!(Arc::ptr_eq(&source, &s.doc().unwrap().wb));
+            assert_eq!(s.doc().unwrap().revision, revision);
+            assert_eq!(s.doc().unwrap().undo.len(), undo);
+            assert_eq!(s.journal, journal);
+            s.execute("analysis.cancel", json!({"job":next_job})).unwrap();
+        }
+    }
+}
+
+/// Upstream macro steps must inherit the terminal work hook and retain normal rollback/history.
+#[test]
+fn macro_run_inherits_work_refusal_and_preserves_source_history_and_journal() {
+    let (mut s, _) = fixture();
+    s.execute("macro.save", json!({"macro":{"name":"PaidSteps","steps":[{"type":"command","id":"cell.set","params":{"cell":"A1","input":"99"}}]}}))
+        .unwrap();
+    s.execute("cell.set", json!({"cell":"D1","input":"temporary"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    let d = s.doc().unwrap();
+    let (source, selection, revision, undo, redo) = (d.wb.clone(), d.selection.clone(), d.revision, d.undo.clone(), d.redo.clone());
+    let journal = s.journal.clone();
+    let hook = gridcraft_calc::WorkHook::new(|units| units == 0);
+    {
+        let _scope = hook.enter().unwrap();
+        assert!(s.execute("macro.run", json!({"name":"PaidSteps","onConflict":"overwrite"})).is_err());
+        assert!(!hook.charge(0));
+    }
+    let d = s.doc().unwrap();
+    assert!(Arc::ptr_eq(&source, &d.wb));
+    assert_eq!(d.selection, selection);
+    assert_eq!(d.revision, revision);
+    assert_eq!(s.journal, journal);
+    for (expected, actual) in [(&undo, &d.undo), (&redo, &d.redo)] {
+        assert_eq!(expected.len(), actual.len());
+        for (before, after) in expected.iter().zip(actual) {
+            assert!(Arc::ptr_eq(&before.wb, &after.wb));
+            assert_eq!(before.label, after.label);
+            assert_eq!(before.selection, after.selection);
+        }
+    }
+    s.execute("macro.run", json!({"name":"PaidSteps","onConflict":"overwrite"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), gridcraft_core::Value::Number(99.0));
+}

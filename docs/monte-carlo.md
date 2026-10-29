@@ -1,6 +1,6 @@
 # Monte Carlo simulation
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** bounded work policies and explicit UI/print rendering allowances
+> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-29 · **Change:** bounded work policies and explicit UI/print rendering allowances
 
 **Data → Monte Carlo** samples numeric input cells, recalculates the workbook's own formulas,
 and creates a static report. The same command is available through CLI, the control channel,
@@ -12,7 +12,10 @@ or financial-model template is required.
 1. Add each uncertain input cell. Use a sheet-qualified reference for another sheet, such as
    `'Sales assumptions'!B2`. The input must be a numeric constant, not a formula.
 2. Choose a distribution: **uniform** (minimum/maximum), **triangular**
-   (minimum/mode/maximum), or **normal** (mean/standard deviation).
+   (minimum/mode/maximum), **normal** (mean/standard deviation), **lognormal**
+   (arithmetic mean/CV), **Poisson** (mean), **binomial** (trials/probability), or
+   **hypergeometric** (draws/successes/population). See [seeded worksheet processes](monte-carlo-processes.md)
+   for conditional counts, stationary AR1, numerical limits and the explicit deterministic forecast guard.
 3. Enter output cells, one per line. They may be on different sheets. Outputs must evaluate to
    finite numbers in every trial.
 4. Choose random Monte Carlo or Latin Hypercube sampling (LHS), total iterations, and a
@@ -131,13 +134,17 @@ References (mathematical descriptions, no implementation code copied):
 [NIST proportion intervals](https://www.itl.nist.gov/div898/handbook/prc/section2/prc241.htm),
 [Sandia Dakota sampling](https://snl-dakota.github.io/docs/latest_release/users/usingdakota/studytypes/uq.html).
 
+Macro steps refuse the `analysis.*` lifecycle because jobs belong to the live session; a macro dry run must not advance or cancel one.
+
 ## Limits and reproducibility
 
-- Discrete distributions, non-Gaussian copulas and percentile fan charts are future work.
+- Non-Gaussian copulas and percentile fan charts are future work. Discrete marginals and
+  conditional count/AR1 worksheet functions are native; see the [process contract](monte-carlo-processes.md).
   The report supports up to 64 formula outputs for monthly forecasts.
 - At most 32 inputs, 64 outputs, 2–100,000 iterations, and 1,000,000 input/output sample cells.
   Limits apply even when the sample table is omitted. Large formula models may take time.
-- The seed controls the input RNG. Workbook formulas such as `RAND`/`NOW`, external data and
+- The seed controls the input RNG and versioned `MC.*` worksheet streams. See
+  [counts and AR1](monte-carlo-processes.md) for stream identity and process limits. Workbook formulas such as `RAND`/`NOW`, external data and
   floating-point platform differences are outside that reproducibility contract. Use
   deterministic formulas when reproducibility matters.
 - What-if trials always recalculate, including in manual calculation mode, without changing the
@@ -254,3 +261,5 @@ unsupported `WEBSERVICE`/`FILTERXML` calls remain worksheet errors rather than n
 | 2026-10-28 | Atomic hot-path counters, bounded prepaid analysis credit and independent ordinary-command caps; expose maxWork in discovery. |
 | 2026-10-28 | Independent conditional-format rendering limits/cache; admit imported documents only after successful recalculation; integrate current upstream rules. |
 | 2026-10-28 | Clarified the separate per-sheet print/PDF allowance, ambient command accounting and lack of cross-workbook containment. |
+| 2026-10-28 | Extended native marginals and documented seeded conditional counts and stationary AR1. |
+| 2026-10-29 | Bill sparse spill traversal by the key interval actually scanned, with a bounded recalculation regression. |
