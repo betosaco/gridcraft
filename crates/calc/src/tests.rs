@@ -95,6 +95,35 @@ fn unrelated_spill_does_not_exhaust_small_sum_recalculation_budget() {
     assert!(spent.load(Ordering::Relaxed) < 50_000);
 }
 
+/// Dependents force the large array to be materialized during the same recalculation pass.
+#[test]
+fn dependent_same_pass_spill_keeps_small_sum_reads_within_budget() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+
+    let mut t = T::new();
+    t.set("A1", "2");
+    t.set("A2", "3");
+    t.set("Z1000", "=SEQUENCE(10000)+$A$1");
+    for row in 1..=100 {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("B{row}")), Cell::formula(Formula::new("=0*$Z$1000+SUM($A$1:$A$2)")));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let spent = Arc::new(AtomicU64::new(0));
+    let counter = spent.clone();
+    let hook = crate::WorkHook::new(move |units| counter.fetch_add(units, Ordering::Relaxed).saturating_add(units) <= 500_000);
+    let _scope = hook.enter().unwrap();
+    t.set("A1", "7");
+    assert!(hook.charge(0));
+    assert_eq!(t.num("Z10999"), 10_007.0);
+    for row in 1..=100 {
+        assert_eq!(t.num(&format!("B{row}")), 10.0);
+    }
+    assert!(spent.load(Ordering::Relaxed) < 500_000);
+}
+
 #[test]
 fn arrays_that_spill_as_before_do_not_requeue_their_dependents() {
     // Two arrays that each read the other's spill area, and a formula reading both spills.
