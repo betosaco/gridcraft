@@ -67,6 +67,34 @@ fn spill_range_operator() {
     assert_eq!(t.num("E1"), 100.0);
 }
 
+/// Repeated small aggregates pay for their range, not a large unrelated sheet spill.
+#[test]
+fn unrelated_spill_does_not_exhaust_small_sum_recalculation_budget() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+
+    let mut t = T::new();
+    t.set("A1", "2");
+    t.set("A2", "3");
+    t.set("Z1000", "=SEQUENCE(10000)");
+    for row in 1..=100 {
+        t.set(&format!("B{row}"), "=SUM($A$1:$A$2)");
+    }
+    assert!(t.wb.sheet(0).unwrap().spill.len() >= 9999);
+    let spent = Arc::new(AtomicU64::new(0));
+    let counter = spent.clone();
+    let hook = crate::WorkHook::new(move |units| counter.fetch_add(units, Ordering::Relaxed).saturating_add(units) <= 50_000);
+    let _scope = hook.enter().unwrap();
+    t.set("A1", "7");
+    assert!(hook.charge(0), "unrelated spill exhausted the range-work allowance");
+    for row in 1..=100 {
+        assert_eq!(t.num(&format!("B{row}")), 10.0);
+    }
+    assert!(spent.load(Ordering::Relaxed) < 50_000);
+}
+
 #[test]
 fn arrays_that_spill_as_before_do_not_requeue_their_dependents() {
     // Two arrays that each read the other's spill area, and a formula reading both spills.
