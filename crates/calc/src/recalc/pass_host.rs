@@ -527,9 +527,10 @@ impl Host for PassHost<'_> {
     /// Charges stored cells and spill traversal without billing virtual whole-column blanks.
     fn visit_range(&mut self, sheet: usize, range: RangeRef, f: &mut dyn FnMut(&Value) -> bool) -> bool {
         // Sparse aggregations must charge the work they visit, not millions of virtual blanks.
-        // Spills are scanned separately below, so their full index size is a conservative cost.
+        // Match the spill key interval scanned below; unrelated spills must not tax each read.
         let visited = if self.work.is_some() {
-            self.wb.sheet(sheet).map_or(0, |sh| sh.cells.iter_range(range).count().saturating_add(sh.spill.len())) as u64
+            self.wb.sheet(sheet).map_or(0, |sh| sh.cells.iter_range(range).count().saturating_add(sh.spill.range(range.start..=range.end).count()))
+                as u64
         } else {
             0
         };
