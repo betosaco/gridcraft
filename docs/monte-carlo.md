@@ -1,6 +1,6 @@
 # Monte Carlo simulation
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** bounded work policies and explicit UI/print rendering allowances
+> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-29 · **Change:** bounded work policies and explicit UI/print rendering allowances
 
 **Data → Monte Carlo** samples numeric input cells, recalculates the workbook's own formulas,
 and creates a static report. The same command is available through CLI, the control channel,
@@ -134,6 +134,8 @@ References (mathematical descriptions, no implementation code copied):
 [NIST proportion intervals](https://www.itl.nist.gov/div898/handbook/prc/section2/prc241.htm),
 [Sandia Dakota sampling](https://snl-dakota.github.io/docs/latest_release/users/usingdakota/studytypes/uq.html).
 
+Macro steps refuse the `analysis.*` lifecycle because jobs belong to the live session; a macro dry run must not advance or cancel one.
+
 ## Limits and reproducibility
 
 - Non-Gaussian copulas and percentile fan charts are future work. Discrete marginals and
@@ -250,10 +252,6 @@ unsupported `WEBSERVICE`/`FILTERXML` calls remain worksheet errors rather than n
 
 ## Revision history
 
-- 2026-10-29: bill sparse spill traversal by the key interval actually scanned, with a bounded recalculation regression.
-
-- 2026-10-28: extend native marginals and document seeded conditional counts/stationary AR1.
-
 | Date | Change |
 | --- | --- |
 | 2026-10-27 | Native Monte Carlo, correlation matrix, numerical diagnostics and conditional tornado report. |
@@ -263,3 +261,5 @@ unsupported `WEBSERVICE`/`FILTERXML` calls remain worksheet errors rather than n
 | 2026-10-28 | Atomic hot-path counters, bounded prepaid analysis credit and independent ordinary-command caps; expose maxWork in discovery. |
 | 2026-10-28 | Independent conditional-format rendering limits/cache; admit imported documents only after successful recalculation; integrate current upstream rules. |
 | 2026-10-28 | Clarified the separate per-sheet print/PDF allowance, ambient command accounting and lack of cross-workbook containment. |
+| 2026-10-28 | Extended native marginals and documented seeded conditional counts and stationary AR1. |
+| 2026-10-29 | Bill sparse spill traversal by the key interval actually scanned, with a bounded recalculation regression. |

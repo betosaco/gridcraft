@@ -3,15 +3,6 @@
 Last updated: 2026-10-28. Target: GridCraft's Rust engine, native CLI/MCP, desktop and WASM.
 This extends [Monte Carlo](monte-carlo.md); it does not require a Python simulator or a separate add-on install.
 
-## Delivery checklist
-
-- [x] Host-neutral scalar requests in functions/calc; RNG and numerical algorithms remain in engine.
-- [x] Static Poisson, binomial, hypergeometric and arithmetic-parameter lognormal marginals.
-- [x] Conditional count functions and stationary normal/lognormal AR1 paths within isolated trials.
-- [x] Seeded stream identities, bounded allocations, work charging and persistent failure checks.
-- [ ] Run integration regressions and all repository quality gates on the final source.
-- [ ] Publish the contribution, rebuild the desktop, and validate the financial workbook migration.
-
 ## Keep the deterministic forecast explicit
 
 `MC.ACTIVE()` returns FALSE outside a native Monte Carlo trial. The five draw functions return

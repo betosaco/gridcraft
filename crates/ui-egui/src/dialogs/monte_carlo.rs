@@ -1,6 +1,12 @@
 //! Thin editor for the engine's generic Monte Carlo command.
 use super::{Dialog, Json, Map, json};
 
+/// Starts a uniform input without preloading parameters belonging to another distribution.
+/// The editor supplies those defaults only when that distribution is selected.
+pub(super) fn input_template(cell: &str) -> Json {
+    json!({"cell":cell,"distribution":"uniform","min":"0","max":"1"})
+}
+
 /// Edits a labeled textual parameter while retaining typed numeric values until an actual edit.
 /// Engine validation receives invalid text unchanged instead of silently substituting a default.
 fn text(ui: &mut egui::Ui, values: &mut Map<String, Json>, key: &str, label: &str) {
@@ -101,7 +107,7 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
         inputs.remove(i);
     }
     if inputs.len() < 32 && ui.button("Add input").clicked() {
-        inputs.push(json!({"cell":"","distribution":"uniform","min":"0","mode":"0.5","max":"1","mean":"0","stdDev":"1"}));
+        inputs.push(input_template(""));
     }
     d.values.insert("inputs".into(), json!(inputs));
     ui.label("For conditional counts and monthly AR1 processes, use MC.* worksheet functions with IF(MC.ACTIVE(), sample, baseline).");
@@ -211,6 +217,34 @@ pub(super) fn params(d: &Dialog) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Adding an input and then selecting a distribution supplies its own untouched defaults.
+    #[test]
+    fn monte_carlo_added_inputs_use_distribution_defaults_without_overwriting_edits() {
+        use egui_kittest::kittest::Queryable as _;
+        for (kind, mean) in [("lognormal", 1.0), ("poisson", 10.0)] {
+            let d = Dialog::custom("monteCarlo", "Monte Carlo", json!({"inputs":[input_template("A1")],"method":"random"}));
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(1000.0, 1000.0))
+                .build_ui_state(|ui, d: &mut Dialog| form(ui, d, &mut false, &mut true), d);
+            h.run_steps(2);
+            h.get_by_label("Add input").click();
+            h.run_steps(2);
+            let inputs = h.state_mut().values.get_mut("inputs").unwrap().as_array_mut().unwrap();
+            assert_eq!(inputs.len(), 2);
+            for input in inputs {
+                assert!(input.get("mean").is_none());
+                input["distribution"] = json!(kind);
+            }
+            h.run_steps(2);
+            let p = params(h.state());
+            assert_eq!(p["inputs"][0]["mean"], mean);
+            assert_eq!(p["inputs"][1]["mean"], mean);
+            h.state_mut().values["inputs"][1]["mean"] = json!("0");
+            h.run_steps(2);
+            assert_eq!(params(h.state())["inputs"][1]["mean"], 0.0);
+        }
+    }
 
     /// Every added distribution reaches the engine with numeric parameters, including whitespace.
     #[test]
