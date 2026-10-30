@@ -596,9 +596,17 @@ impl Session {
         self.docs.len() - 1
     }
     /// Closes a workbook and its windows; the most recently active remaining window comes forward.
+    /// Clears and cancels the active analysis only when this workbook is its source.
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
             let d = self.docs.remove(i);
+            // A host may close the source through this public API, bypassing command guards.
+            // Discard only that workbook's analysis and notify any retained cancellation handle.
+            if self.analysis_job.as_ref().is_some_and(|job| job.source_doc() == d.uid)
+                && let Some(job) = self.analysis_job.take()
+            {
+                job.cancellation().cancel();
+            }
             self.groups.retain(|g| g.doc != d.uid);
             // A macro being debugged in this workbook ends with it; its group just went.
             if self.macro_debug.as_ref().is_some_and(|m| m.doc == d.uid) {
