@@ -56,6 +56,8 @@ Implementations are original Rust, not copied numerical-library code.
 Configuration records `stochasticVersion: 1`. This version uses the existing SplitMix64 generator
 and Box–Muller normal transform. Count stream keys include the seed, absolute trial number,
 physical formula sheet **name**, row/column, distribution family, and explicit text stream ID.
+Evaluating a sheet-scoped defined name keeps the caller's physical identity: the name's
+scope changes reference resolution only, so callers on different sheets retain distinct streams.
 Repeated calls at that identity reuse the same driving uniform; use different IDs for independent
 count stages in the same cell. Moving/renaming a formula can change its draws.
 
