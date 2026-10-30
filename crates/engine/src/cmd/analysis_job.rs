@@ -107,7 +107,10 @@ fn finish(s: &mut Session, p: &Json) -> Result<Json> {
     if !job.ready() {
         return Err(bad("analysis.finish", "job is not ready; advance or cancel it"));
     }
-    job.check_source(s)?;
+    if let Err(error) = job.check_source(s) {
+        drop(s.analysis_job.take());
+        return Err(error);
+    }
     let job = s.analysis_job.take().ok_or_else(|| bad("analysis.finish", "job is absent"))?;
     let config = job.configuration();
     let result = job.publish(s)?;
