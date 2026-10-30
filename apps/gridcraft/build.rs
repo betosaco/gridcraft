@@ -9,17 +9,21 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../assets/app-icon/gridcraft.ico");
     println!("cargo:rerun-if-env-changed=GRIDCRAFT_REQUIRE_WINRES");
+    println!("cargo:rerun-if-env-changed=DISHUB_CALCULO_VERSION");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
+    let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.1.0-preview.1".into());
     let mut res = winresource::WindowsResource::new();
     res.set_icon("../../assets/app-icon/gridcraft.ico")
-        .set("ProductName", "GridCraft")
-        .set("FileDescription", "GridCraft spreadsheet")
-        .set("CompanyName", "Learning Machines LLC")
+        .set("ProductName", "DisHub Cálculo")
+        .set("ProductVersion", &version)
+        .set("FileVersion", &version)
+        .set("FileDescription", "DisHub Cálculo — Monte Carlo and actuarial spreadsheet")
+        .set("CompanyName", "DisHub")
         .set("LegalCopyright", "Copyright (c) the GridCraft authors. MIT OR Apache-2.0.")
-        .set("OriginalFilename", "gridcraft.exe")
-        .set("InternalName", "gridcraft");
+        .set("OriginalFilename", "dishub-calculo.exe")
+        .set("InternalName", "dishub-calculo");
     if let Err(e) = res.compile() {
         if std::env::var_os("GRIDCRAFT_REQUIRE_WINRES").is_some() {
             eprintln!("embedding Windows resources failed: {e}");

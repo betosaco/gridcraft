@@ -75,7 +75,7 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("commandSearch", json!({}));
     }
-    let __k = big_button(ui, Icon::Script, "Agent\nControl", "How agents drive GridCraft (MCP / control channel)", false);
+    let __k = big_button(ui, Icon::Script, "Agent\nControl", "How agents drive DisHub Cálculo (MCP / control channel)", false);
     control_keytip(app, ui, &__k, "agents");
     if __k.clicked() {
         app.open_dialog("agents", json!({}));
@@ -85,12 +85,12 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("journal", json!({}));
     }
-    let __k = big_button(ui, Icon::Script, "Check for\nUpdates…", "Look for a newer GridCraft release", false);
+    let __k = big_button(ui, Icon::Script, "Download\nReleases…", "Open verified DisHub Cálculo downloads (manual updates)", false);
     control_keytip(app, ui, &__k, "checkForUpdates");
     if __k.clicked() {
         app.run_or_alert("app.checkForUpdates", json!({}));
     }
-    let __k = big_button(ui, Icon::Script, "About\nGridCraft", "Version, contributors and the AI models that helped", false);
+    let __k = big_button(ui, Icon::Script, "About\nDisHub Cálculo", "Version, contributors and the AI models that helped", false);
     control_keytip(app, ui, &__k, "about");
     if __k.clicked() {
         app.open_dialog("about", json!({}));

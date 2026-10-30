@@ -1,0 +1,117 @@
+name: DisHub Calculo preview — Windows x64
+
+# This isolated distribution branch intentionally builds one preview target. It does not
+# invoke the upstream release fan-out or publish a release, and it uses no signing secrets.
+on:
+  push:
+    branches: [release/dishub-calculo-preview]
+    paths:
+      - .github/workflows/dishub-calculo-preview-windows.yml
+      - Cargo.toml
+      - Cargo.lock
+      - apps/gridcraft/**
+      - apps/gridcraft-cli/**
+      - crates/**
+      - assets/**
+      - packaging/windows/**
+      - distribution/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dishub-calculo-preview-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-x64:
+    if: github.repository == 'betosaco/gridcraft' && github.ref == 'refs/heads/release/dishub-calculo-preview'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      DIST: ${{ github.workspace }}/dist/release
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      CRAFT_FONTS_REQUIRED: '1'
+      GRIDCRAFT_BUILD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the same pinned fonts as the validated source
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
+        with:
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      - name: Check out suite translations
+        uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: dishub-calculo-preview-windows-x64
+      - name: Install the existing packaging toolchain
+        uses: storytold/craft-common-actions/actions/install-wix@main
+        with:
+          wix-version: 5.0.2
+      - name: Record the exact candidate source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD).Trim() -ne $env:GITHUB_SHA) { throw 'Checkout SHA does not match this run.' }
+          if (git status --porcelain) { throw 'Source must be clean before building a public candidate.' }
+          New-Item -ItemType Directory -Force -Path $env:DIST | Out-Null
+          @{
+            commit = $env:GITHUB_SHA
+            tree = (git rev-parse 'HEAD^{tree}').Trim()
+            dirty = $false
+            platform = 'windows'
+            architecture = 'x64'
+            channel = 'experimental'
+            commercialSignature = $false
+            runId = $env:GITHUB_RUN_ID
+          } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $env:DIST 'windows-x64-source.json')
+      - name: Parse the integration gate before the native build
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'distribution/verify-windows-preview.ps1'), [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) { $errors | Format-List; throw 'Windows verification script failed parsing.' }
+      - name: Build and package only Windows x64, without commercial signing
+        shell: pwsh
+        run: ./packaging/windows/package.ps1 -Arch x64
+      - name: Verify the real payload and MSI install/uninstall
+        shell: pwsh
+        run: |
+          ./distribution/verify-windows-preview.ps1 `
+            -ArtifactDirectory $env:DIST `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'dishub-calculo-windows-proof') `
+            -ExpectedCommit $env:GITHUB_SHA
+      - name: Upload verified candidate files and proof
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dishub-calculo-preview-windows-x64-${{ github.sha }}
+          path: |
+            dist/release/dishub-calculo-*-windows-x64.msi
+            dist/release/dishub-calculo-*-windows-x64-portable.zip
+            dist/release/dishub-calculo-*-windows-x64.manifest.json
+            dist/release/windows-x64-source.json
+            ${{ runner.temp }}/dishub-calculo-windows-proof/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve diagnostic logs on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dishub-calculo-preview-windows-x64-failure-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/dishub-calculo-windows-proof/
+            dist/release/*.manifest.json
+            dist/release/windows-x64-source.json
+          if-no-files-found: warn
+          retention-days: 7

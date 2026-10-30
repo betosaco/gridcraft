@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build, sign and (optionally) notarize the macOS release artifacts:
 #
-#   $DIST/gridcraft-<version>-macos-<arch>.dmg          GridCraft.app on a drag-to-Applications DMG
-#   $DIST/gridcraft-cli-<version>-macos-<arch>.zip      the headless CLI
+#   $DIST/dishub-calculo-<version>-macos-<arch>.dmg          DisHub Cálculo.app on a drag-to-Applications DMG
+#   $DIST/dishub-calculo-cli-<version>-macos-<arch>.zip      the headless CLI
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 #
@@ -14,8 +14,14 @@
 #   APPLE_ID, APPLE_PASSWORD (app-specific password), APPLE_TEAM_ID
 set -euo pipefail
 # shellcheck source=../env.sh
+export DISHUB_CALCULO_VERSION="${DISHUB_CALCULO_VERSION:-0.1.0-preview.1}"
+export GRIDCRAFT_VERSION="$DISHUB_CALCULO_VERSION"
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/macos"
+if [[ "$VERSION" != "$(workspace_version)" ]]; then
+  echo "error: distribution version must match Cargo.toml; update source metadata before packaging" >&2
+  exit 1
+fi
 
 ARCH=universal
 SKIP_BUILD=0
@@ -39,9 +45,9 @@ export MACOSX_DEPLOYMENT_TARGET=11.0
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
-APP="$WORK/GridCraft.app"
-DMG="$DIST/gridcraft-$VERSION-macos-$ARCH.dmg"
-CLI_ZIP="$DIST/gridcraft-cli-$VERSION-macos-$ARCH.zip"
+APP="$WORK/DisHub Cálculo.app"
+DMG="$DIST/dishub-calculo-$VERSION-macos-$ARCH.dmg"
+CLI_ZIP="$DIST/dishub-calculo-cli-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
 if [[ "$IDENTITY" = "-" ]]; then
@@ -52,7 +58,7 @@ else
   warn "macOS: APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID incomplete; signed but not notarized"
 fi
 
-echo "==> GridCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
+echo "==> DisHub Cálculo $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
 
 # ---- build -------------------------------------------------------------------------------------
 if [[ "$SKIP_BUILD" = 0 ]]; then
@@ -111,14 +117,14 @@ notarize() {
   fi
 }
 
-# ---- GridCraft.app ----------------------------------------------------------------------------
+# ---- DisHub Cálculo.app ----------------------------------------------------------------------------
 echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
-cp "$WORK/bin/gridcraft" "$APP/Contents/MacOS/GridCraft"
-cp "$ROOT/assets/app-icon/gridcraft.icns" "$APP/Contents/Resources/GridCraft.icns"
+cp "$WORK/bin/gridcraft" "$APP/Contents/MacOS/DisHubCalculo"
+cp "$ROOT/assets/app-icon/gridcraft.icns" "$APP/Contents/Resources/DisHubCalculo.icns"
 # Bundled dependency font notices are installed before the app is signed.
-cp "$ROOT/NOTICE" "$ROOT/ATTRIBUTION.md" "$APP/Contents/Resources/"
+copy_docs "$APP/Contents/Resources"
 # Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
 copy_font_licences "$APP/Contents/Resources"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
@@ -129,13 +135,13 @@ printf 'APPL????' >"$APP/Contents/PkgInfo"
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
 # Today the only nested code is the main executable; frameworks/helpers would be signed here too.
-sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/GridCraft"
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/DisHubCalculo"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
 
 if [[ "$NOTARIZE" = 1 ]]; then
-  ditto -c -k --keepParent "$APP" "$WORK/GridCraft-notarize.zip"
-  notarize "$WORK/GridCraft-notarize.zip"
+  ditto -c -k --keepParent "$APP" "$WORK/dishub-calculo-notarize.zip"
+  notarize "$WORK/dishub-calculo-notarize.zip"
   stapler_retry staple "$APP"
   stapler_retry validate "$APP"
   spctl --assess --type execute -vvv "$APP"
@@ -145,17 +151,14 @@ fi
 echo "==> building $DMG"
 STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/GridCraft.app"
+ditto "$APP" "$STAGE/DisHub Cálculo.app"
 ln -s /Applications "$STAGE/Applications"
-# Finder window layout: background, icon size and positions (packaging/macos/dmg/README.md).
-mkdir -p "$STAGE/.background"
-cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"
-cp "$HERE/dmg/dmg-layout.DS_Store" "$STAGE/.DS_Store"
+# Use Finder default layout: the upstream .DS_Store is bound to its product/volume identity.
 rm -f "$DMG" "$WORK/raw.dmg"
 # makehybrid + convert builds the image without attaching a device, unlike `create -srcfolder`,
 # which is flaky on CI runners ("Resource busy") and hangs in sandboxed sessions.
 # The volume name has no version: .DS_Store finds the background through an alias that includes it.
-hdiutil makehybrid -hfs -hfs-volume-name "GridCraft" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
+hdiutil makehybrid -hfs -hfs-volume-name "DisHub Cálculo" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
 hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
 rm -f "$WORK/raw.dmg"
 sign "$DMG"
@@ -169,17 +172,50 @@ fi
 
 # ---- CLI ---------------------------------------------------------------------------------------
 echo "==> building $CLI_ZIP"
-CLI_DIR="$WORK/gridcraft-cli-$VERSION-macos-$ARCH"
+CLI_DIR="$WORK/dishub-calculo-cli-$VERSION-macos-$ARCH"
 mkdir -p "$CLI_DIR"
-cp "$WORK/bin/gridcraft-cli" "$CLI_DIR/"
+cp "$WORK/bin/gridcraft-cli" "$CLI_DIR/dishub-calculo-cli"
 copy_docs "$CLI_DIR"
-sign --options runtime "$CLI_DIR/gridcraft-cli"
-codesign --verify --strict --verbose=2 "$CLI_DIR/gridcraft-cli"
+sign --options runtime "$CLI_DIR/dishub-calculo-cli"
+codesign --verify --strict --verbose=2 "$CLI_DIR/dishub-calculo-cli"
 rm -f "$CLI_ZIP"
 ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"
 # A bare Mach-O can't carry a stapled ticket; Gatekeeper looks the notarization up online.
 if [[ "$NOTARIZE" = 1 ]]; then notarize "$CLI_ZIP"; fi
 
 "$WORK/bin/gridcraft-cli" --version
+# Final artifact metadata is a candidate record, not a public-download or signing claim.
+SIGNATURE_STATUS=identity-signed
+[[ "$IDENTITY" = "-" ]] && SIGNATURE_STATUS=ad-hoc
+NOTARIZATION_STATUS=not-requested
+[[ "$NOTARIZE" = 1 ]] && NOTARIZATION_STATUS=accepted-and-verified
+if [[ ! "$GRIDCRAFT_BUILD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  echo "error: artifact manifest requires a full source commit SHA" >&2
+  exit 1
+fi
+SOURCE_DIRTY=false
+[[ -n "$(git -C "$ROOT" status --porcelain)" ]] && SOURCE_DIRTY=true
+cat >"$DIST/dishub-calculo-$VERSION-macos-$ARCH.manifest.json" <<EOF
+{
+  "schemaVersion": 1,
+  "product": "DisHub Cálculo",
+  "version": "$VERSION",
+  "upstreamVersion": "0.13.0",
+  "upstreamCommit": "d26063521acd8afb375db15eb46467bef0d9ab16",
+  "sourceCommit": "$GRIDCRAFT_BUILD_SHA",
+  "sourceDirty": $SOURCE_DIRTY,
+  "os": "macos",
+  "architecture": "$ARCH",
+  "updatePolicy": "manual",
+  "releaseChannel": "experimental",
+  "publiclyAvailable": false,
+  "payloadSignatureStatus": "$SIGNATURE_STATUS",
+  "notarizationStatus": "$NOTARIZATION_STATUS",
+  "artifacts": [
+    {"filename": "$(basename "$DMG")", "bytes": $(stat -f%z "$DMG"), "sha256": "$(sha256 "$DMG")", "status": "candidate", "url": null},
+    {"filename": "$(basename "$CLI_ZIP")", "bytes": $(stat -f%z "$CLI_ZIP"), "sha256": "$(sha256 "$CLI_ZIP")", "status": "candidate", "url": null}
+  ]
+}
+EOF
 echo "==> done"
 ls -lh "$DMG" "$CLI_ZIP"

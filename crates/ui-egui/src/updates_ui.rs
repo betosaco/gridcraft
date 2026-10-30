@@ -1,68 +1,55 @@
-//! One background check at startup (and on Help ▸ Check for Updates…) and the modal prompt that
-//! offers the new release: Update and Restart (direct self-update), Download or Later. The flow
-//! itself is `craft_update::updater::Updater`.
+//! This edition only opens its verified-download page when explicitly requested.
+//! It never constructs an upstream updater, checks at startup or replaces an executable.
 
-use craft_update::updater::{Action, Status, Updater};
+use crate::{SheetApp, distribution};
 
-use crate::SheetApp;
-
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-
+#[derive(Default)]
 pub(crate) struct Runtime {
-    updater: Updater,
-    /// The check at start was asked for; `tick` starts it with the context.
-    startup: bool,
-    /// Help ▸ Check for Updates… was chosen; the next `tick` starts it.
     manual: bool,
 }
 
-impl Default for Runtime {
-    fn default() -> Self {
-        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION), startup: false, manual: false }
-    }
-}
-
-/// Ask for a check; the next frame's `tick` starts it. A manual one reports every outcome.
+/// Keep the existing command API, but ignore automatic startup-check requests.
 pub(crate) fn start(app: &mut SheetApp, manual: bool) {
-    if manual {
-        app.updates_rt.manual = true;
+    app.updates_rt.manual |= manual;
+}
+
+/// Open the publisher's page once for an explicit request; no network task is created here.
+pub(crate) fn tick(app: &mut SheetApp, _ctx: &egui::Context) {
+    if !std::mem::take(&mut app.updates_rt.manual) {
+        return;
+    }
+    if let Some(open) = &app.services.open_url {
+        open(distribution::DOWNLOAD_URL);
     } else {
-        app.updates_rt.startup = true;
+        app.message = Some((distribution::APP_NAME.into(), format!("Download verified releases manually: {}", distribution::DOWNLOAD_URL)));
     }
 }
 
-pub(crate) fn tick(app: &mut SheetApp, ctx: &egui::Context) {
-    let rt = &mut app.updates_rt;
-    if std::mem::take(&mut rt.manual) {
-        rt.updater.check_now(ctx);
-    } else if rt.startup {
-        rt.updater.check_at_start(ctx);
-    }
-    rt.updater.tick(ctx);
-    let lang = app.ui.language;
-    let outcome = match rt.updater.status() {
-        Status::UpToDate => Some(lang.tr("GridCraft {version} is up to date.").replace("{version}", VERSION)),
-        Status::Failed(e) => Some(lang.tr("Could not check for updates: {error}").replace("{error}", e)),
-        Status::Idle | Status::Checking => None,
-    };
-    if let Some(message) = outcome {
-        rt.updater.dismiss_status();
-        app.message = Some(("GridCraft".into(), message));
-    }
-}
+/// There is no automatic-update prompt or close/restart action in this edition.
+pub(crate) fn show(_app: &mut SheetApp, _ctx: &egui::Context) {}
 
-pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
-    // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
-    let clean = !app.session.documents().iter().any(|d| d.is_dirty());
-    match app.updates_rt.updater.show_if(ctx, clean) {
-        Action::OpenUrl(url) => {
-            if let Some(open) = &app.services.open_url {
-                open(&url);
-            }
-        }
-        // The guarded close path asks about unsaved work; the restart helper relaunches once the
-        // process has exited.
-        Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-        Action::None => {}
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use super::{start, tick};
+    use crate::{Services, SheetApp, distribution};
+
+    #[test]
+    fn startup_is_silent_and_manual_command_only_opens_the_edition_download_page() {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let sink = opened.clone();
+        let services = Services { open_url: Some(Box::new(move |url| sink.borrow_mut().push(url.to_owned()))), ..Default::default() };
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        start(&mut app, false);
+        tick(&mut app, &ctx);
+        assert!(opened.borrow().is_empty(), "startup must never check or open an upstream release");
+        assert!(app.run("app.checkForUpdates", serde_json::json!({})).is_ok());
+        tick(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        assert_eq!(*opened.borrow(), [distribution::DOWNLOAD_URL]);
+        assert!(app.message.is_none());
     }
 }

@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  Build, sign and package GridCraft for Windows.
+  Build, sign and package DisHub Cálculo for Windows.
 
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
-    gridcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
-    gridcraft-<version>-windows-<arch>-portable.zip   gridcraft.exe + gridcraft-cli.exe
+    dishub-calculo-<version>-windows-<arch>.msi            per-user by default, with optional machine scope (WiX v5)
+    dishub-calculo-<version>-windows-<arch>-portable.zip   dishub-calculo.exe + dishub-calculo-cli.exe
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
@@ -32,16 +32,13 @@ function Invoke-Native([string] $What, [scriptblock] $Block) {
   if ($LASTEXITCODE -ne 0) { throw "$What failed with exit code $LASTEXITCODE" }
 }
 
-# The version lives in one place: [workspace.package] version in the root Cargo.toml.
-$Version = $env:GRIDCRAFT_VERSION
-if (-not $Version) {
-  $inPkg = $false
-  foreach ($line in Get-Content (Join-Path $Root 'Cargo.toml')) {
-    if ($line -match '^\s*\[') { $inPkg = ($line.Trim() -eq '[workspace.package]'); continue }
-    if ($inPkg -and $line -match '^\s*version\s*=\s*"([^"]+)"') { $Version = $Matches[1]; break }
-  }
+# This edition has a release track independent from its GridCraft 0.13.0 base.
+$Version = if ($env:DISHUB_CALCULO_VERSION) { $env:DISHUB_CALCULO_VERSION } else { '0.1.0-preview.1' }
+$env:DISHUB_CALCULO_VERSION = $Version
+$sourceManifest = Get-Content -Raw -LiteralPath (Join-Path $Root 'Cargo.toml')
+if ($sourceManifest -notmatch '(?ms)^\[workspace\.package\]\s*\r?\nversion\s*=\s*"([^"\r\n]+)"' -or $Matches[1] -ne $Version) {
+  throw 'Distribution version must match Cargo.toml; update source metadata before packaging.'
 }
-if (-not $Version) { throw 'could not read [workspace.package] version from Cargo.toml' }
 # MSI ProductVersion is numeric (major.minor.build); pre-release tags are dropped there.
 $MsiVersion = ($Version -split '-')[0]
 
@@ -53,7 +50,7 @@ New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 if (-not $env:GRIDCRAFT_BUILD_SHA) { $env:GRIDCRAFT_BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
 if (-not $env:GRIDCRAFT_BUILD_DATE) { $env:GRIDCRAFT_BUILD_DATE = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
 
-Write-Output "GridCraft $Version for Windows $Arch ($Target)"
+Write-Output "DisHub Cálculo $Version for Windows $Arch ($Target)"
 
 if (-not $SkipBuild) {
   # Static CRT: no VC++ redistributable needed. Scoped to the target so host build scripts and
@@ -86,16 +83,19 @@ foreach ($check in @(@('gridcraft.exe', 2), @('gridcraft-cli.exe', 3))) {
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-Copy-Item (Join-Path $Bin 'gridcraft.exe'), (Join-Path $Bin 'gridcraft-cli.exe') $Stage
+Copy-Item (Join-Path $Bin 'gridcraft.exe') (Join-Path $Stage 'dishub-calculo.exe')
+Copy-Item (Join-Path $Bin 'gridcraft-cli.exe') (Join-Path $Stage 'dishub-calculo-cli.exe')
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'gridcraft.exe') (Join-Path $Stage 'gridcraft-cli.exe')
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'dishub-calculo.exe') (Join-Path $Stage 'dishub-calculo-cli.exe')
 
 # ---- font notices for the MSI ------------------------------------------------------------------
 # The portable ZIP already carries these notices; stage the complete files before MSI creation too.
 $Docs = Join-Path $Stage 'font-licences'
 New-Item -ItemType Directory -Force -Path $Docs | Out-Null
 # Bundled dependency font notices are required even without optional craft-fonts.
-Copy-Item -LiteralPath (Join-Path $Root 'NOTICE'), (Join-Path $Root 'ATTRIBUTION.md') -Destination $Docs
+foreach ($notice in 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE', 'ATTRIBUTION.md') {
+  Copy-Item -LiteralPath (Join-Path $Root $notice) -Destination $Docs
+}
 $HasCraftFontLicences = 1
 if ($env:CRAFT_FONTS_DIR) {
   foreach ($ofl in Get-ChildItem -Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts\*\OFL.txt') -File -ErrorAction SilentlyContinue) {
@@ -106,7 +106,7 @@ if ($env:CRAFT_FONTS_DIR) {
 # ---- end font notices for the MSI --------------------------------------------------------------
 
 # ---- MSI ---------------------------------------------------------------------------------------
-$Msi = Join-Path $Dist "gridcraft-$Version-windows-$Arch.msi"
+$Msi = Join-Path $Dist "dishub-calculo-$Version-windows-$Arch.msi"
 Invoke-Native 'wix build' {
   wix build (Join-Path $PSScriptRoot 'gridcraft.wxs') -arch $Arch `
     -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\gridcraft.ico')" `
@@ -120,7 +120,7 @@ Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Ms
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
 
 # ---- portable zip ------------------------------------------------------------------------------
-$Portable = Join-Path $TargetDir "windows-package\gridcraft-$Version-windows-$Arch-portable"
+$Portable = Join-Path $TargetDir "windows-package\dishub-calculo-$Version-windows-$Arch-portable"
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
@@ -134,7 +134,7 @@ if ($env:CRAFT_FONTS_DIR) {
     Copy-Item $ofl.FullName (Join-Path $Portable "OFL-$($ofl.Directory.Name).txt")
   }
 }
-$Zip = Join-Path $Dist "gridcraft-$Version-windows-$Arch-portable.zip"
+$Zip = Join-Path $Dist "dishub-calculo-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $Portable -DestinationPath $Zip
 
@@ -142,8 +142,35 @@ Compress-Archive -Path $Portable -DestinationPath $Zip
 # here; .github/workflows/windows-arm64.yml installs and runs it on ARM64 instead.
 $HostArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 if ($Arch -ne 'arm64' -or $HostArch -eq 'arm64') {
-  Invoke-Native 'gridcraft-cli --version' { & (Join-Path $Stage 'gridcraft-cli.exe') --version }
+  Invoke-Native 'gridcraft-cli --version' { & (Join-Path $Stage 'dishub-calculo-cli.exe') --version }
 } else {
   Write-Output "skipping gridcraft-cli --version: an $Arch build doesn't run on this $HostArch machine"
 }
 Get-Item $Msi, $Zip | Format-Table Name, Length
+
+# Report actual final-file signatures; a successful unsigned build is never labelled signed.
+$payloadSignatures = @('dishub-calculo.exe', 'dishub-calculo-cli.exe') | ForEach-Object {
+  $path = Join-Path $Stage $_
+  @{ filename = $_; signatureStatus = [string](Get-AuthenticodeSignature -LiteralPath $path).Status }
+}
+$manifest = @{
+  schemaVersion = 1
+  product = 'DisHub Cálculo'
+  version = $Version
+  msiVersion = $MsiVersion
+  upstreamVersion = '0.13.0'
+  upstreamCommit = 'd26063521acd8afb375db15eb46467bef0d9ab16'
+  sourceCommit = $env:GRIDCRAFT_BUILD_SHA
+  sourceDirty = [bool](git -C $Root status --porcelain)
+  os = 'windows'
+  architecture = $Arch
+  updatePolicy = 'manual'
+  releaseChannel = 'experimental'
+  publiclyAvailable = $false
+  payloadSignatures = @($payloadSignatures)
+  artifacts = @(
+    @{ filename = [IO.Path]::GetFileName($Msi); bytes = (Get-Item $Msi).Length; sha256 = (Get-FileHash $Msi -Algorithm SHA256).Hash.ToLowerInvariant(); signatureStatus = [string](Get-AuthenticodeSignature -LiteralPath $Msi).Status; status = 'candidate'; url = $null },
+    @{ filename = [IO.Path]::GetFileName($Zip); bytes = (Get-Item $Zip).Length; sha256 = (Get-FileHash $Zip -Algorithm SHA256).Hash.ToLowerInvariant(); signatureStatus = 'NotSigned'; status = 'candidate'; url = $null }
+  )
+}
+$manifest | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 -LiteralPath (Join-Path $Dist "dishub-calculo-$Version-windows-$Arch.manifest.json")

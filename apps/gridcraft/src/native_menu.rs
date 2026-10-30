@@ -181,11 +181,11 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
         (
             "Help",
             vec![
-                ("Check for Updates…", "app.checkForUpdates", None),
+                ("Download Verified Releases…", "app.checkForUpdates", None),
                 ("Agent Control (MCP)…", "dialog:agents", None),
                 ("Contributors…", "dialog:about:Contributors", None),
-                ("GridCraft on getartcraft.com", "url:https://getartcraft.com/apps/gridcraft", None),
-                ("Join the ArtCraft Discord…", "url:https://discord.gg/artcraft", None),
+                ("DisHub Cálculo Documentation", "url:https://www.dishub.city/actuarial", None),
+                ("Source and Licences", "url:https://github.com/betosaco/gridcraft", None),
             ],
         ),
     ]
@@ -222,8 +222,8 @@ fn select_theme(app: &mut SheetApp, id: &str) -> bool {
 impl NativeMenu {
     pub fn install(ctx: &egui::Context) -> NativeMenu {
         let menu = Menu::new();
-        let app_menu = Submenu::new("GridCraft", true);
-        let about = MenuItem::with_id("dialog:about", "About GridCraft", true, None);
+        let app_menu = Submenu::new(gridcraft_ui_egui::distribution::APP_NAME, true);
+        let about = MenuItem::with_id("dialog:about", "About DisHub Cálculo", true, None);
         let _ = app_menu.append_items(&[
             &about,
             &PredefinedMenuItem::separator(),
@@ -233,7 +233,7 @@ impl NativeMenu {
             &PredefinedMenuItem::hide_others(None),
             &PredefinedMenuItem::show_all(None),
             &PredefinedMenuItem::separator(),
-            &MenuItem::with_id(QUIT, "Quit GridCraft", true, Accelerator::from_str("CMD+Q").ok()),
+            &MenuItem::with_id(QUIT, "Quit DisHub Cálculo", true, Accelerator::from_str("CMD+Q").ok()),
         ]);
         let _ = menu.append(&app_menu);
         let mut theme_items = Vec::new();
@@ -405,7 +405,7 @@ mod tests {
     fn help_menu_checks_for_updates_through_the_registered_command() {
         let tree = tree();
         let (_, help) = tree.iter().find(|(title, _)| *title == "Help").expect("Help menu");
-        let item = help.iter().find(|e| e.0 == "Check for Updates…").expect("Check for Updates… in the Help menu");
+        let item = help.iter().find(|e| e.0 == "Download Verified Releases…").expect("Download Verified Releases… in the Help menu");
         assert_eq!(item.1, "app.checkForUpdates");
         let mut app = SheetApp::new(gridcraft_engine::Session::new(), Default::default());
         assert!(app.run(item.1, serde_json::json!({})).is_ok());

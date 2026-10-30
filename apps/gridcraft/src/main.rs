@@ -78,15 +78,21 @@ impl eframe::App for App {
 }
 
 fn config_dir() -> Option<std::path::PathBuf> {
+    config_dir_from(std::env::var_os("HOME"), std::env::var_os("APPDATA"), std::env::var_os("XDG_CONFIG_HOME"))
+}
+
+/// Resolve only this edition's settings namespace; never migrate or read upstream settings.
+fn config_dir_from(
+    home: Option<std::ffi::OsString>,
+    appdata: Option<std::ffi::OsString>,
+    xdg: Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
     if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Application Support/GridCraft"))
+        home.map(|h| std::path::PathBuf::from(h).join("Library/Application Support").join(gridcraft_ui_egui::distribution::SETTINGS_DIRECTORY))
     } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| std::path::PathBuf::from(a).join("GridCraft"))
+        appdata.map(|a| std::path::PathBuf::from(a).join(gridcraft_ui_egui::distribution::SETTINGS_DIRECTORY))
     } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
-            .map(|c| c.join("gridcraft"))
+        xdg.map(std::path::PathBuf::from).or_else(|| home.map(|h| std::path::PathBuf::from(h).join(".config"))).map(|c| c.join("dishub-calculo"))
     }
 }
 
@@ -255,16 +261,14 @@ fn main() -> eframe::Result<()> {
         }
     }));
     let args: Vec<String> = std::env::args().skip(1).collect();
-    // The restart helper a self-update spawns: it finishes the swap and relaunches, then exits.
-    if let Some(done) = craft_update::self_update::finish(&gridcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
-        if let Err(e) = done {
-            eprintln!("GridCraft update helper failed: {e}");
-            std::process::exit(1);
-        }
-        return Ok(());
-    }
+    // DisHub Cálculo is updated manually; no upstream executable-replacement helper runs.
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("GridCraft {}", env!("CARGO_PKG_VERSION"));
+        println!(
+            "{} {} (GridCraft base {})",
+            gridcraft_ui_egui::distribution::APP_NAME,
+            gridcraft_ui_egui::distribution::VERSION,
+            gridcraft_ui_egui::distribution::UPSTREAM_VERSION
+        );
         return Ok(());
     }
     let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
@@ -298,7 +302,7 @@ fn main() -> eframe::Result<()> {
     if let Some(logger) = logger {
         match log_dir().filter(|_| prefs_enabled()) {
             Some(dir) => match logger.attach_dir(&dir) {
-                Ok(path) => log::info!("GridCraft {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
+                Ok(path) => log::info!("DisHub Cálculo {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
                 // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
                 Err(e) => log::warn!("no log file: {e}"),
             },
@@ -327,10 +331,10 @@ fn main() -> eframe::Result<()> {
         app.open_path(f);
     }
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("GridCraft")
+        .with_title(gridcraft_ui_egui::distribution::APP_NAME)
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([640.0, 420.0])
-        .with_app_id("ai.storyteller.gridcraft")
+        .with_app_id(gridcraft_ui_egui::distribution::APP_ID)
         .with_drag_and_drop(true);
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
@@ -375,7 +379,7 @@ fn main() -> eframe::Result<()> {
     let pending = std::cell::Cell::new(Some(app));
     let run = |options: eframe::NativeOptions| {
         eframe::run_native(
-            "GridCraft",
+            gridcraft_ui_egui::distribution::APP_NAME,
             options,
             Box::new(|cc| {
                 let Some(mut app) = pending.take() else {
@@ -420,6 +424,21 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod packaging_tests {
     use gridcraft_engine::io::FileKind;
+
+    #[test]
+    fn settings_are_independent_of_the_upstream_installation() {
+        let path = super::config_dir_from(Some("test-home".into()), Some("test-appdata".into()), Some("test-xdg".into())).expect("settings root");
+        let upstream = if cfg!(target_os = "macos") {
+            std::path::PathBuf::from("test-home/Library/Application Support/GridCraft")
+        } else if cfg!(windows) {
+            std::path::PathBuf::from("test-appdata/GridCraft")
+        } else {
+            std::path::PathBuf::from("test-xdg/gridcraft")
+        };
+        assert_ne!(path, upstream);
+        assert!(path.file_name().is_some_and(|name| name == "DisHubCalculo" || name == "dishub-calculo"));
+        assert!(super::config_dir_from(None, None, None).is_none());
+    }
 
     /// The text between `start` and `end` that follows each `marker` in `text`, sorted (e.g. the
     /// `xlsb` in `Classes\.xlsb\OpenWithProgids`).

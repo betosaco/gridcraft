@@ -1,7 +1,8 @@
 {
-  "id": "gridcraft",
-  "name": "GridCraft",
-  "upgradeCode": "5511327B-F305-41BE-92D0-EB84944E7C4D",
+  "id": "dishub-calculo",
+  "name": "DisHub Cálculo",
+  "registryRoot": "Software\\DisHubCalculo",
+  "upgradeCode": "05C18FF9-F9BE-5BD2-968F-4C229F64BD17",
   "sources": [
     "gridcraft.wxs"
   ],
@@ -9,139 +10,139 @@
   "localization": [],
   "extensions": [],
   "payloads": [
-    "gridcraft-cli.exe",
-    "gridcraft.exe"
+    "dishub-calculo-cli.exe",
+    "dishub-calculo.exe"
   ],
   "registry": [
     [
       "-1",
-      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\gridcraft.exe",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\dishub-calculo.exe",
       "",
       "[#GridcraftExe]"
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.Workbook",
+      "Software\\Classes\\DisHubCalculo.Workbook",
       "",
-      "GridCraft Workbook"
+      "DisHub Cálculo Workbook"
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.Workbook\\DefaultIcon",
+      "Software\\Classes\\DisHubCalculo.Workbook\\DefaultIcon",
       "",
       "\"[#GridcraftExe]\",0"
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.Workbook\\shell\\open\\command",
+      "Software\\Classes\\DisHubCalculo.Workbook\\shell\\open\\command",
       "",
       "\"[#GridcraftExe]\" \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.TextData",
+      "Software\\Classes\\DisHubCalculo.TextData",
       "",
-      "GridCraft Text Data"
+      "DisHub Cálculo Text Data"
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.TextData\\DefaultIcon",
+      "Software\\Classes\\DisHubCalculo.TextData\\DefaultIcon",
       "",
       "\"[#GridcraftExe]\",0"
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.TextData\\shell\\open\\command",
+      "Software\\Classes\\DisHubCalculo.TextData\\shell\\open\\command",
       "",
       "\"[#GridcraftExe]\" \"%1\""
     ],
     [
       "-1",
       "Software\\Classes\\.xlsx\\OpenWithProgids",
-      "GridCraft.Workbook",
-      "GridCraft.Workbook"
+      "DisHubCalculo.Workbook",
+      "DisHubCalculo.Workbook"
     ],
     [
       "-1",
       "Software\\Classes\\.xlsm\\OpenWithProgids",
-      "GridCraft.Workbook",
-      "GridCraft.Workbook"
+      "DisHubCalculo.Workbook",
+      "DisHubCalculo.Workbook"
     ],
     [
       "-1",
       "Software\\Classes\\.xlsb\\OpenWithProgids",
-      "GridCraft.Workbook",
-      "GridCraft.Workbook"
+      "DisHubCalculo.Workbook",
+      "DisHubCalculo.Workbook"
     ],
     [
       "-1",
       "Software\\Classes\\.ods\\OpenWithProgids",
-      "GridCraft.Workbook",
-      "GridCraft.Workbook"
+      "DisHubCalculo.Workbook",
+      "DisHubCalculo.Workbook"
     ],
     [
       "-1",
       "Software\\Classes\\.csv\\OpenWithProgids",
-      "GridCraft.TextData",
-      "GridCraft.TextData"
+      "DisHubCalculo.TextData",
+      "DisHubCalculo.TextData"
     ],
     [
       "-1",
       "Software\\Classes\\.tsv\\OpenWithProgids",
-      "GridCraft.TextData",
-      "GridCraft.TextData"
+      "DisHubCalculo.TextData",
+      "DisHubCalculo.TextData"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities",
+      "Software\\DisHubCalculo\\Capabilities",
       "ApplicationName",
-      "GridCraft"
+      "DisHub Cálculo"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities",
+      "Software\\DisHubCalculo\\Capabilities",
       "ApplicationDescription",
       "Open-source spreadsheet for .xlsx, CSV and TSV files"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      "Software\\DisHubCalculo\\Capabilities\\FileAssociations",
       ".xlsx",
-      "GridCraft.Workbook"
+      "DisHubCalculo.Workbook"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      "Software\\DisHubCalculo\\Capabilities\\FileAssociations",
       ".xlsm",
-      "GridCraft.Workbook"
+      "DisHubCalculo.Workbook"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      "Software\\DisHubCalculo\\Capabilities\\FileAssociations",
       ".csv",
-      "GridCraft.TextData"
+      "DisHubCalculo.TextData"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      "Software\\DisHubCalculo\\Capabilities\\FileAssociations",
       ".tsv",
-      "GridCraft.TextData"
+      "DisHubCalculo.TextData"
     ],
     [
       "-1",
       "Software\\RegisteredApplications",
-      "GridCraft",
-      "Software\\GridCraft\\Capabilities"
+      "DisHub Cálculo",
+      "Software\\DisHubCalculo\\Capabilities"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Installer",
+      "Software\\DisHubCalculo\\Installer",
       "DesktopShortcut",
       "[DESKTOPSHORTCUT]"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Installer",
+      "Software\\DisHubCalculo\\Installer",
       "DesktopShortcutComponent",
       "#1"
     ]

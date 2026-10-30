@@ -46,6 +46,17 @@ try {
   $session = $installer.OpenPackage($file, 1)
   $properties = @{}
   foreach ($row in (Read-Rows $database 'SELECT `Property`, `Value` FROM `Property`' 2)) { $properties[$row[0]] = $row[1] }
+  # This fork must never upgrade or register over the original GridCraft installation.
+  if ($properties['UpgradeCode'].Trim('{}') -eq '5511327B-F305-41BE-92D0-EB84944E7C4D') {
+    throw 'Distribution isolation failed: upstream GridCraft UpgradeCode is forbidden.'
+  }
+  $registeredRows = @(Read-Rows $database 'SELECT `Root`, `Key`, `Name`, `Value` FROM `Registry`' 4)
+  foreach ($row in $registeredRows) {
+    if ($row[1] -match '^Software\\GridCraft(\\|$)|^Software\\Classes\\GridCraft\.|\\App Paths\\gridcraft\.exe$' -or
+        ($row[1] -eq 'Software\RegisteredApplications' -and $row[2] -eq 'GridCraft')) {
+      throw 'Distribution isolation failed: installer writes an upstream GridCraft registration.'
+    }
+  }
   $secureProperties = @($properties['SecureCustomProperties'] -split ';')
   if ('INSTALLFOLDER' -notin $secureProperties) {
     throw 'The selected installation folder must survive elevation (secure INSTALLFOLDER).'
@@ -55,9 +66,9 @@ try {
     if ($properties['UpgradeCode'].Trim('{}') -ne $policy.upgradeCode) { throw 'Launcher upgrade identity changed.' }
     $dirs = @{}
     foreach ($row in (Read-Rows $database 'SELECT `Directory`, `Directory_Parent`, `DefaultDir` FROM `Directory`' 3)) { $dirs[$row[0]] = @($row[1],$row[2]) }
-    if ($dirs['INSTALLFOLDER'][0] -ne 'CraftSuiteFolder' -or $dirs['CraftSuiteFolder'][1] -ne 'ArtCraft' -or
+    if ($dirs['INSTALLFOLDER'][0] -ne 'CraftSuiteFolder' -or $dirs['CraftSuiteFolder'][1] -ne 'DisHub' -or
         $dirs['CraftSuiteFolder'][0] -ne 'LocalProgramsFolder' -or $dirs['LocalProgramsFolder'][0] -ne 'LocalAppDataFolder') {
-      throw 'Launcher new-install folder must be under the per-user ArtCraft suite root.'
+      throw 'Launcher new-install folder must be under the per-user DisHub suite root.'
     }
     foreach ($explicit in @('', 'F:\Chosen exact launcher')) {
       Set-SessionProperty $session 'PREVIOUSINSTALLFOLDER' 'E:\Existing exact launcher'
@@ -76,7 +87,7 @@ try {
         throw 'Launcher registration or shortcut preference changed unexpectedly.'
       }
     }
-    Write-Output 'PASS ArtCraft Launcher: per-user scope, suite folder, remembered/custom paths and existing registration. No installation performed.'
+    Write-Output 'PASS DisHub Launcher: per-user scope, suite folder, remembered/custom paths and existing registration. No installation performed.'
     return
   }
   if ($properties['ALLUSERS'] -ne '2' -or $properties['MSIINSTALLPERUSER'] -ne '1') {
@@ -88,7 +99,7 @@ try {
     $directories[$row[0]] = @($row[1], $row[2])
   }
   if ($directories['INSTALLFOLDER'][0] -ne 'CraftSuiteFolder' -or
-      $directories['CraftSuiteFolder'][1] -ne 'ArtCraft') { throw 'Expected the app under the ArtCraft suite folder.' }
+      $directories['CraftSuiteFolder'][1] -ne 'DisHub') { throw 'Expected the app under the DisHub suite folder.' }
   $programs = $directories['CraftSuiteFolder'][0]
   if ($programs -eq 'ProgramFiles6432Folder') { $programs = $directories[$programs][0] }
   if ($programs -notin 'ProgramFilesFolder', 'ProgramFiles64Folder') {
@@ -161,7 +172,7 @@ try {
   $machineRoot = if ((Get-PackageTemplate $database) -match '^Intel') {
     if (Get-SessionProperty $session 'VersionNT64') { ${env:ProgramFiles(x86)} } else { $env:ProgramFiles }
   } elseif ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
-  $machineFolder = (Join-Path $machineRoot "ArtCraft\$($policy.name)") + '\'
+  $machineFolder = (Join-Path $machineRoot "DisHub\$($policy.name)") + '\'
   foreach ($scope in @('1', '')) {
     Set-SessionProperty $session 'ALLUSERS' $scope
     Set-SessionProperty $session 'INSTALLFOLDER' ''
@@ -171,7 +182,7 @@ try {
       if ($session.EvaluateCondition($row[2]) -eq 1 -and $session.DoAction($row[0]) -ne 1) { throw "$($row[0]) failed." }
     }
     $folder = Get-SessionProperty $session 'INSTALLFOLDER'
-    $wanted = if ($scope -eq '1') { $machineFolder } else { (Join-Path $env:LOCALAPPDATA "Programs\ArtCraft\$($policy.name)") + '\' }
+    $wanted = if ($scope -eq '1') { $machineFolder } else { (Join-Path $env:LOCALAPPDATA "Programs\DisHub\$($policy.name)") + '\' }
     if ($folder -ine $wanted) { throw "Wizard default folder for ALLUSERS='$scope' is '$folder', expected '$wanted'." }
   }
   $execute = @{}
@@ -286,7 +297,9 @@ try {
     $found = @($registry | Where-Object { $_[0] -eq $entry[0] -and $_[1] -eq $entry[1] -and $_[2] -eq $entry[2] -and $_[3] -eq $entry[3] })
     if ($found.Count -ne 1) { throw "Lost or changed registration: $($entry[1]) / $($entry[2])" }
   }
-  $installDir = @($registry | Where-Object { $_[0] -eq '-1' -and $_[1] -eq "Software\$($policy.name)" -and $_[2] -eq 'InstallDir' -and $_[3] -eq '[INSTALLFOLDER]' })
+  # The visible product name can contain spaces/accents; registry identity is a separate contract.
+  if ([string]::IsNullOrWhiteSpace($policy.registryRoot)) { throw 'An explicit installer registryRoot is required.' }
+  $installDir = @($registry | Where-Object { $_[0] -eq '-1' -and $_[1] -eq $policy.registryRoot -and $_[2] -eq 'InstallDir' -and $_[3] -eq '[INSTALLFOLDER]' })
   if ($installDir.Count -ne 1) { throw 'A context-sensitive installation-folder record is required.' }
   Write-Output "PASS $($policy.name): $cases scope cases, folder preservation, action sequencing and registry contract. No installation performed."
 } finally {
