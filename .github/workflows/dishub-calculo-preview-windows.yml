@@ -4,7 +4,7 @@ name: DisHub Calculo preview — Windows x64
 # invoke the upstream release fan-out or publish a release, and it uses no signing secrets.
 on:
   push:
-    branches: [release/dishub-calculo-preview]
+    branches: [distribution/dishub-calculo-preview]
     paths:
       - .github/workflows/dishub-calculo-preview-windows.yml
       - Cargo.toml
@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   windows-x64:
-    if: github.repository == 'betosaco/gridcraft' && github.ref == 'refs/heads/release/dishub-calculo-preview'
+    if: github.repository == 'betosaco/gridcraft' && github.ref == 'refs/heads/distribution/dishub-calculo-preview'
     runs-on: windows-latest
     timeout-minutes: 90
     env:
