@@ -155,12 +155,9 @@ ditto "$APP" "$STAGE/DisHub Cálculo.app"
 ln -s /Applications "$STAGE/Applications"
 # Use Finder default layout: the upstream .DS_Store is bound to its product/volume identity.
 rm -f "$DMG" "$WORK/raw.dmg"
-# makehybrid + convert builds the image without attaching a device, unlike `create -srcfolder`,
-# which is flaky on CI runners ("Resource busy") and hangs in sandboxed sessions.
-# The volume name has no version: .DS_Store finds the background through an alias that includes it.
-hdiutil makehybrid -hfs -hfs-volume-name "DisHub Cálculo" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
-hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
-rm -f "$WORK/raw.dmg"
+# makehybrid's synthesized HFS FinderInfo invalidates sealed app resources after mounting.
+# APFS preserves the signed bundle metadata and is supported by the macOS 11 minimum target.
+hdiutil create -srcfolder "$STAGE" -fs APFS -format UDZO -imagekey zlib-level=9 -volname "DisHub Cálculo" "$DMG"
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 if [[ "$NOTARIZE" = 1 ]]; then
