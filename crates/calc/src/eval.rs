@@ -136,6 +136,8 @@ pub struct Evaluator<'h> {
     pub host: &'h mut dyn Host,
     pub sheet: usize,
     pub at: CellRef,
+    /// Physical formula origin; scoped names may temporarily change reference resolution.
+    simulation_site: crate::SimulationSite,
     env: Vec<(String, Ev)>,
     depth: usize,
     /// LAMBDA calls in progress.
@@ -161,7 +163,8 @@ impl Ctx for FnCtx<'_, '_> {
     /// Supplies the physical formula identity while keeping sampler policy out of calc.
     fn simulation(&mut self, request: crate::SimulationRequest<'_>) -> Option<Value> {
         self.ev.host.note_volatile();
-        self.ev.host.simulation(self.ev.sheet, self.ev.at, request)
+        let site = self.ev.simulation_site;
+        self.ev.host.simulation(site.sheet, site.cell, request)
     }
     /// Native functions/lift charge the same persistent policy as their enclosing formula trial.
     fn charge_work(&mut self, units: u64) -> bool {
@@ -199,6 +202,7 @@ impl Ctx for FnCtx<'_, '_> {
             host: &mut *self.ev.host,
             sheet: area.sheet,
             at,
+            simulation_site: crate::SimulationSite { sheet: area.sheet, cell: at },
             env,
             depth: self.ev.depth,
             calls: self.ev.calls,
@@ -227,7 +231,17 @@ impl Ctx for FnCtx<'_, '_> {
 
 impl<'h> Evaluator<'h> {
     pub fn new(host: &'h mut dyn Host, sheet: usize, at: CellRef) -> Self {
-        Evaluator { host, sheet, at, env: Vec::new(), depth: 0, calls: 0, stack_top: 0, fuel: LAMBDA_FUEL }
+        Evaluator {
+            host,
+            sheet,
+            at,
+            simulation_site: crate::SimulationSite { sheet, cell: at },
+            env: Vec::new(),
+            depth: 0,
+            calls: 0,
+            stack_top: 0,
+            fuel: LAMBDA_FUEL,
+        }
     }
 
     /// Evaluates to a value (references are dereferenced; multi-cell → array).

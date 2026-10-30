@@ -14,6 +14,46 @@ fn site(sheet: usize, row: u32, col: u32) -> SimulationSite {
     SimulationSite { sheet, cell: CellRef::new(row, col) }
 }
 
+/// Scoped aliases preserve the exact seeded count stream of each physical caller, not the defining sheet.
+#[test]
+fn scoped_name_counts_match_direct_calls_at_each_physical_site() {
+    use gridcraft_model::{Cell, DefinedName, Formula, Sheet, Workbook};
+
+    let mut named = Workbook::new();
+    named.sheets.push(Arc::new(Sheet::new("Forecast")));
+    named.names.push(DefinedName {
+        name: "Draw".into(),
+        scope: Some(0),
+        formula: "MC.POISSON($B$1,\"orders\")".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    for sheet in 0..2 {
+        named.sheet_mut(sheet).unwrap().cells.set(CellRef::new(0, 1), Cell::value(Value::Number(if sheet == 0 { 10.0 } else { 99.0 })));
+        named.sheet_mut(sheet).unwrap().cells.set(CellRef::new(0, 0), Cell::formula(Formula::new("=Sheet1!Draw")));
+    }
+    let mut direct = named.clone();
+    direct.names.clear();
+    for sheet in 0..2 {
+        direct.sheet_mut(sheet).unwrap().cells.set(CellRef::new(0, 0), Cell::formula(Formula::new("=MC.POISSON(10,\"orders\")")));
+    }
+    let sheets = Arc::new(vec!["Sheet1".into(), "Forecast".into()]);
+    for trial in 0..64 {
+        for workbook in [&mut named, &mut direct] {
+            let runtime = Runtime::new(0x1234_5678, trial, sheets.clone());
+            let _scope = runtime.hook().enter().unwrap();
+            gridcraft_calc::Calc::new().recalc_all(workbook);
+            runtime.check().unwrap();
+            assert_eq!(runtime.stats().count_requests, 2);
+        }
+        for sheet in 0..2 {
+            let expected = direct.sheet(sheet).unwrap().value(CellRef::new(0, 0));
+            assert!(matches!(expected, Value::Number(_)));
+            assert_eq!(named.sheet(sheet).unwrap().value(CellRef::new(0, 0)), expected, "trial {trial}, physical sheet {sheet}");
+        }
+    }
+}
+
 /// Extracting a finite number also makes a silent worksheet error fail a regression.
 fn number(runtime: &Runtime, site: SimulationSite, request: SimulationRequest<'_>) -> f64 {
     match runtime.dispatch(site, request) {

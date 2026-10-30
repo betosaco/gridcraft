@@ -271,7 +271,7 @@ pub(super) fn lognormal(mean: f64, cv: f64, z: f64) -> Result<f64> {
 /// Restricts this first process contract to stationary AR1 paths with bounded state.
 fn validate_process(name: &str, step: u32, spec: Ar1Spec) -> Result<()> {
     if name.is_empty() || name.len() > 128 || step == 0 || step > MAX_STEPS {
-        return Err(bad(CMD, "AR1 requires an ID of 1–128 bytes and step1–1200"));
+        return Err(bad(CMD, "AR1 requires an ID of 1–128 bytes and step 1–1200"));
     }
     if !spec.mean.is_finite() || !spec.scale.is_finite() || spec.scale < 0.0 || !spec.phi.is_finite() || spec.phi.abs() >= 1.0 {
         return Err(bad(CMD, "AR1 requires finite parameters, nonnegative scale and abs(phi)<1"));
