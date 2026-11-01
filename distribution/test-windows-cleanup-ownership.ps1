@@ -63,7 +63,8 @@ try {
       }
     }
 '@
-  $normalized = $text.Replace("`r`n", "`n")
+  $guarded = $guarded.Replace("`r`n", "`n").Replace("`r", "`n")
+  $normalized = $text.Replace("`r`n", "`n").Replace("`r", "`n")
   Require (($normalized.Split([string[]]@($guarded), [StringSplitOptions]::None).Count - 1) -eq 1) 'Expected exactly one ownership guard for the RED control.'
   $legacy = "    if (Test-Path `$ownRegistry) { Remove-ItemProperty -LiteralPath `$ownRegistry -Name 'UpgradePreservationSentinel' -ErrorAction SilentlyContinue }"
   $controlFolder = Join-Path $output 'private-red-copy'
