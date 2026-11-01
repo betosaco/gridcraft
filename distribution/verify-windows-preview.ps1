@@ -29,6 +29,7 @@ $proof = [ordered]@{
   guiLaunch = 'NOT_RUN: native headless CLI and MSI payload only'
   coexistence = 'PENDING: sentinel isolation, not a real upstream installation'
   futureQualification = @('interactive cancellation and full rollback')
+  lastProductInventory = @()
 }
 
 function Assert-True([bool] $Condition, [string] $Message) {
@@ -201,9 +202,44 @@ $previousInstallAttempted = $false
 $settingsFolder = Join-Path $env:APPDATA 'DisHubCalculo'
 $createdSettingsFolder = $false
 $createdRegistrySentinel = $false
+function Get-MsiIdentity([string] $Path) {
+  $installer = New-Object -ComObject WindowsInstaller.Installer
+  $database = $installer.OpenDatabase($Path, 0)
+  $identity = @{}
+  foreach ($property in @('ProductCode', 'UpgradeCode', 'ProductName', 'ProductVersion')) {
+    $query = 'SELECT `Value` FROM `Property` WHERE `Property` = ''{0}''' -f $property
+    $view = $database.OpenView($query)
+    try {
+      $view.Execute()
+      $record = $view.Fetch()
+      Assert-True ($null -ne $record) "MSI is missing required identity property: $property"
+      $identity[$property] = $record.StringData(1)
+    } finally { $view.Close() }
+  }
+  Assert-True ($identity.UpgradeCode -eq '{05C18FF9-F9BE-5BD2-968F-4C229F64BD17}' -and $identity.ProductName -eq 'DisHub Cálculo') 'MSI has an unexpected product family/name.'
+  return $identity
+}
 function Get-OwnInstalledProducts {
-  return @(Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
-    Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq 'DisHub Cálculo' })
+  # MSI is authoritative; a particular Add/Remove Programs registry path is not its API.
+  $installer = New-Object -ComObject WindowsInstaller.Installer
+  $related = @($installer.RelatedProducts('{05C18FF9-F9BE-5BD2-968F-4C229F64BD17}'))
+  $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  foreach ($product in $installer.ProductsEx('', $currentSid, 7)) {
+    if ($product.ProductCode -notin $related) { continue }
+    $item = [pscustomobject]@{
+      PSChildName = [string]$product.ProductCode
+      DisplayName = [string]$product.InstallProperty('ProductName')
+      DisplayVersion = [string]$product.InstallProperty('VersionString')
+      Context = [int]$product.Context
+      UserSid = [string]$product.UserSid
+      AssignmentType = [string]$product.InstallProperty('AssignmentType')
+    }
+    $proof.lastProductInventory = @($proof.lastProductInventory) + @($item)
+    # Enumerate machine context only to reject it; it must never satisfy this per-user gate.
+    Assert-True ($item.DisplayName -eq 'DisHub Cálculo') 'Related MSI product has an unexpected name.'
+    Assert-True ($item.Context -eq 2 -and $item.UserSid -eq $currentSid -and $item.AssignmentType -eq '0') 'Expected current-user unmanaged MSI context only.'
+    $item
+  }
 }
 try {
   # Refuse existing installations before inspecting artifacts or executing candidate code.
@@ -235,6 +271,8 @@ try {
   }
   $artifactProofs | ForEach-Object { "$($_.sha256)  $($_.filename)" } | Set-Content -Encoding ascii -LiteralPath (Join-Path $output 'SHA256SUMS.txt')
   $msi = Join-Path $artifacts "dishub-calculo-$version-windows-x64.msi"
+  $candidateIdentity = Get-MsiIdentity $msi
+  Assert-True ($candidateIdentity.ProductVersion -eq '0.1.1') 'Candidate MSI numeric version must be 0.1.1.'
   $zip = Join-Path $artifacts "dishub-calculo-$version-windows-x64-portable.zip"
   Assert-True ((Get-AuthenticodeSignature -LiteralPath $msi).Status -eq 'NotSigned') 'This unsigned-preview workflow must not imply commercial signing.'
   $portable = Join-Path $output 'portable'
@@ -279,6 +317,7 @@ try {
   # First verify a clean installation above, then exercise the real previous public MSI.
   $proof.cleanInstallUninstallExitCode = Invoke-Msi @('/x', "`"$msi`"", 'ALLUSERS=""', 'MSIINSTALLPERUSER=1') 'msi-clean-uninstall.log'
   $installCompleted = $false
+  $installAttempted = $false
   Assert-True (-not (Test-Path $installedCli) -and -not (Test-Path $installedApp)) 'Clean uninstall left executable payloads before the upgrade gate.'
   Assert-True (-not (Test-Path $settingsFolder)) 'Refuse to overwrite an existing settings directory in the isolated upgrade gate.'
   $previousMsi = Join-Path $output 'dishub-calculo-0.1.0-preview.1-windows-x64.msi'
@@ -286,10 +325,14 @@ try {
   $previousHash = '5af1906b28ab04b092847d2d03e0c0fc9a13c17dc803a0b9d53ae95456abdadc'
   Invoke-WebRequest -Uri $previousUrl -OutFile $previousMsi
   Assert-True ((Get-FileHash $previousMsi -Algorithm SHA256).Hash.ToLowerInvariant() -eq $previousHash) 'Previous public MSI SHA256 mismatch; refuse execution.'
+  $previousIdentity = Get-MsiIdentity $previousMsi
+  Assert-True ($previousIdentity.ProductVersion -eq '0.1.0' -and $previousIdentity.ProductCode -ne $candidateIdentity.ProductCode) 'Previous MSI must be 0.1.0 with a different ProductCode.'
+  $proof.msiIdentities = @{ previous = $previousIdentity; candidate = $candidateIdentity }
   $previousInstallAttempted = $true
   $proof.previousInstallExitCode = Invoke-Msi @('/i', "`"$previousMsi`"", 'ALLUSERS=""', 'MSIINSTALLPERUSER=1', 'DESKTOPSHORTCUT=0', "INSTALLFOLDER=`"$installFolder`"") 'msi-previous-install.log'
   $oldProducts = @(Get-OwnInstalledProducts)
-  Assert-True ($oldProducts.Count -eq 1 -and $oldProducts[0].DisplayVersion -eq '0.1.0') 'Previous MSI registration must be uniquely version 0.1.0.'
+  $proof.previousProductInventory = $oldProducts
+  Assert-True ($oldProducts.Count -eq 1 -and $oldProducts[0].DisplayVersion -eq '0.1.0' -and $oldProducts[0].PSChildName -eq $previousIdentity.ProductCode) 'Previous MSI registration must be uniquely version 0.1.0.'
   $oldProductCode = $oldProducts[0].PSChildName
   Assert-True (Test-Path $installedCli) 'Previous MSI did not install the CLI.'
   [void](New-Item -ItemType Directory -Path $settingsFolder)
@@ -299,10 +342,12 @@ try {
   $settingsHash = (Get-FileHash $settingsSentinel -Algorithm SHA256).Hash
   [void](New-ItemProperty -Path $ownRegistry -Name 'UpgradePreservationSentinel' -Value $marker -PropertyType String)
   $createdRegistrySentinel = $true
+  $installAttempted = $true
   $proof.upgradeExitCode = Invoke-Msi @('/i', "`"$msi`"", 'ALLUSERS=""', 'MSIINSTALLPERUSER=1', 'DESKTOPSHORTCUT=0', "INSTALLFOLDER=`"$installFolder`"") 'msi-upgrade.log'
   $installCompleted = $true
   $newProducts = @(Get-OwnInstalledProducts)
-  Assert-True ($newProducts.Count -eq 1 -and $newProducts[0].DisplayVersion -eq '0.1.1' -and $newProducts[0].PSChildName -ne $oldProductCode) 'Upgrade must remove the old ProductCode and register only the new 0.1.1 product.'
+  $proof.upgradedProductInventory = $newProducts
+  Assert-True ($newProducts.Count -eq 1 -and $newProducts[0].DisplayVersion -eq '0.1.1' -and $newProducts[0].PSChildName -eq $candidateIdentity.ProductCode -and $newProducts[0].PSChildName -ne $oldProductCode) 'Upgrade must remove the old ProductCode and register only the new 0.1.1 product.'
   Assert-True ((Get-FileHash $installedCli -Algorithm SHA256).Hash -eq (Get-FileHash $portableCli[0].FullName -Algorithm SHA256).Hash) 'Upgrade installed a different CLI from the tested candidate.'
   Assert-True ((Get-FileHash $installedApp -Algorithm SHA256).Hash -eq (Get-FileHash $portableApp[0].FullName -Algorithm SHA256).Hash) 'Upgrade installed a different GUI from the tested candidate.'
   Assert-True ((Get-FileHash $settingsSentinel -Algorithm SHA256).Hash -eq $settingsHash) 'Upgrade changed the user settings sentinel.'
