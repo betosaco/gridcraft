@@ -220,19 +220,43 @@ function Get-MsiIdentity([string] $Path) {
   return ,$identity
 }
 function Get-OwnInstalledProducts {
-  # MSI is authoritative; a particular Add/Remove Programs registry path is not its API.
+  # Bind indexed COM properties explicitly; PowerShell foreach does not define the COM contract.
+  function Read-ComProperty($Target, [string] $Name, [object[]] $Arguments = @()) {
+    return ,$Target.GetType().InvokeMember($Name, [Reflection.BindingFlags]::GetProperty, $null, $Target, $Arguments)
+  }
   $installer = New-Object -ComObject WindowsInstaller.Installer
-  $related = @($installer.RelatedProducts('{05C18FF9-F9BE-5BD2-968F-4C229F64BD17}'))
   $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-  foreach ($product in $installer.ProductsEx('', $currentSid, 7)) {
-    if ($product.ProductCode -notin $related) { continue }
+  $relatedList = Read-ComProperty $installer 'RelatedProducts' @('{05C18FF9-F9BE-5BD2-968F-4C229F64BD17}')
+  $products = Read-ComProperty $installer 'ProductsEx' @('', $currentSid, 7)
+  $diagnostic = [ordered]@{
+    relatedType = $relatedList.GetType().FullName
+    relatedMembers = @($relatedList.PSObject.Properties | ForEach-Object { $_.Name })
+    productsType = $products.GetType().FullName
+    productsMembers = @($products.PSObject.Properties | ForEach-Object { $_.Name })
+    items = @()
+  }
+  $proof.comInventoryDiagnostics = $diagnostic
+  $relatedCount = [int](Read-ComProperty $relatedList 'Count')
+  $productCount = [int](Read-ComProperty $products 'Count')
+  $diagnostic.relatedCount = $relatedCount
+  $diagnostic.productsCount = $productCount
+  Assert-True ($relatedCount -ge 0 -and $productCount -ge 0) 'COM collection counts must be nonnegative.'
+  $related = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  for ($index = 0; $index -lt $relatedCount; $index++) {
+    [void]$related.Add([string](Read-ComProperty $relatedList 'Item' @($index)))
+  }
+  for ($index = 0; $index -lt $productCount; $index++) {
+    $product = Read-ComProperty $products 'Item' @($index)
+    $diagnostic.items += @{ index = $index; type = $product.GetType().FullName; members = @($product.PSObject.Properties | ForEach-Object { $_.Name }) }
+    $code = [string](Read-ComProperty $product 'ProductCode')
+    if (-not $related.Contains($code)) { continue }
     $item = [pscustomobject]@{
-      PSChildName = [string]$product.ProductCode
-      DisplayName = [string]$product.InstallProperty('ProductName')
-      DisplayVersion = [string]$product.InstallProperty('VersionString')
-      Context = [int]$product.Context
-      UserSid = [string]$product.UserSid
-      AssignmentType = [string]$product.InstallProperty('AssignmentType')
+      PSChildName = $code
+      DisplayName = [string](Read-ComProperty $product 'InstallProperty' @('ProductName'))
+      DisplayVersion = [string](Read-ComProperty $product 'InstallProperty' @('VersionString'))
+      Context = [int](Read-ComProperty $product 'Context')
+      UserSid = [string](Read-ComProperty $product 'UserSid')
+      AssignmentType = [string](Read-ComProperty $product 'InstallProperty' @('AssignmentType'))
     }
     $proof.lastProductInventory = @($proof.lastProductInventory) + @($item)
     # Enumerate machine context only to reject it; it must never satisfy this per-user gate.
