@@ -3,8 +3,8 @@
 Monte Carlo simulation and 95 actuarial worksheet functions in a Rust-native spreadsheet.
 This is an independently distributed edition based on **GridCraft by the ArtCraft team and community**, not an official ArtCraft build.
 
-- Experimental preview track: **0.1.0-preview.1** (numeric MSI **0.1.0**).
-- Calculation base: GridCraft 0.13.0, commit `d26063521acd8afb375db15eb46467bef0d9ab16`.
+- Experimental preview track: **0.1.1-preview.1** (numeric MSI **0.1.1**).
+- Calculation base: GridCraft 0.14.2, commit `55850841d39f030fb42f0a07e54903decea7b067`.
 - Product information, tutorials and verified downloads: https://www.dishub.city/actuarial.
 - Calculation documentation: [Monte Carlo](docs/monte-carlo.md), [count distributions and AR1](docs/monte-carlo-processes.md), [actuarial functions](docs/actuarial.md), [method contracts](docs/actuarial-scientific.md), [validation scope](docs/actuarial-validation.md).
 

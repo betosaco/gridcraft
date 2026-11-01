@@ -4,7 +4,7 @@ name: DisHub Calculo preview — Windows x64
 # invoke the upstream release fan-out or publish a release, and it uses no signing secrets.
 on:
   push:
-    branches: [distribution/dishub-calculo-preview]
+    branches: [distribution/dishub-calculo-0142]
     paths:
       - .github/workflows/dishub-calculo-preview-windows.yml
       - Cargo.toml
@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   windows-x64:
-    if: github.repository == 'betosaco/gridcraft' && github.ref == 'refs/heads/distribution/dishub-calculo-preview'
+    if: github.repository == 'betosaco/gridcraft' && github.ref == 'refs/heads/distribution/dishub-calculo-0142'
     runs-on: windows-latest
     timeout-minutes: 90
     env:
@@ -85,6 +85,12 @@ jobs:
       - name: Build and package only Windows x64, without commercial signing
         shell: pwsh
         run: ./packaging/windows/package.ps1 -Arch x64
+      - name: Verify rejection preserves pre-existing settings (negative regression)
+        shell: pwsh
+        run: |
+          ./distribution/test-windows-cleanup-ownership.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'dishub-calculo-cleanup-proof') `
+            -ExpectedCommit $env:GITHUB_SHA
       - name: Verify the real payload and MSI install/uninstall
         shell: pwsh
         run: |
@@ -103,6 +109,7 @@ jobs:
             dist/release/dishub-calculo-*-windows-x64.manifest.json
             dist/release/windows-x64-source.json
             ${{ runner.temp }}/dishub-calculo-windows-proof/
+            ${{ runner.temp }}/dishub-calculo-cleanup-proof/
           if-no-files-found: error
           retention-days: 14
       - name: Preserve diagnostic logs on failure
@@ -112,6 +119,7 @@ jobs:
           name: dishub-calculo-preview-windows-x64-failure-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/dishub-calculo-windows-proof/
+            ${{ runner.temp }}/dishub-calculo-cleanup-proof/
             dist/release/*.manifest.json
             dist/release/windows-x64-source.json
           if-no-files-found: warn

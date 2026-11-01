@@ -4,7 +4,7 @@
 .DESCRIPTION
   Exercises the native CLI through its public headless MCP protocol, installs/uninstalls
   the actual MSI, and verifies upstream-identity sentinels. This is not a GUI launch test,
-  a test of a real preinstalled GridCraft, or previous-version/cancellation qualification.
+  a test of a real preinstalled GridCraft, or full interactive cancellation qualification. A pinned previous public MSI is upgraded in place.
 #>
 param(
   [Parameter(Mandatory = $true)] [string] $ArtifactDirectory,
@@ -28,7 +28,7 @@ $proof = [ordered]@{
   commercialSignature = $false
   guiLaunch = 'NOT_RUN: native headless CLI and MSI payload only'
   coexistence = 'PENDING: sentinel isolation, not a real upstream installation'
-  futureQualification = @('previous fork version upgrade', 'interactive cancellation and full rollback')
+  futureQualification = @('interactive cancellation and full rollback')
 }
 
 function Assert-True([bool] $Condition, [string] $Message) {
@@ -101,7 +101,7 @@ function Test-NativeCli([string] $Cli, [string] $Label, [string] $ExpectedVersio
     if (-not $versionProcess.WaitForExit(30000)) { $versionProcess.Kill($true); $versionProcess.WaitForExit(); throw 'CLI version command timed out.' }
     $versionText = $versionOut.Result.Trim()
     Assert-True ($versionProcess.ExitCode -eq 0) "CLI version command failed: $($versionErr.Result)"
-    Assert-True ($versionText -eq "dishub-calculo-cli $ExpectedVersion (GridCraft base 0.13.0)") 'CLI name/version/base identity does not match this edition.'
+    Assert-True ($versionText -eq "dishub-calculo-cli $ExpectedVersion (GridCraft base 0.14.2)") 'CLI name/version/base identity does not match this edition.'
   } finally { $versionProcess.Dispose() }
   $start = [Diagnostics.ProcessStartInfo]::new()
   $start.FileName = $Cli
@@ -126,6 +126,14 @@ function Test-NativeCli([string] $Cli, [string] $Label, [string] $ExpectedVersio
     $expectedMc = @('MC.ACTIVE', 'MC.AR1.LOGNORMAL', 'MC.AR1.NORMAL', 'MC.BINOMIAL', 'MC.HYPERGEOMETRIC', 'MC.POISSON')
     Assert-True ((Json $mc) -eq (Json $expectedMc)) 'Expected the six named native MC functions.'
     Assert-True ((Engine 'formulas.evaluate' @{ formula = '=ACT.ANNUITY(1,0)' }) -eq 1) 'ACT annuity exact oracle must equal 1.'
+    foreach ($oracle in @(
+      @{ formula = '=LET(x,3,x*2)'; expected = 6 },
+      @{ formula = '=LAMBDA(x,x+1)(4)'; expected = 5 },
+      @{ formula = '=SUM(MAP(SEQUENCE(3),LAMBDA(x,x*2)))'; expected = 12 },
+      @{ formula = '=SUM(SCAN(0,SEQUENCE(3),LAMBDA(a,x,a+x)))'; expected = 10 }
+    )) {
+      Assert-True ((Engine 'formulas.evaluate' @{ formula = $oracle.formula }) -eq $oracle.expected) "Lambda/dynamic-array oracle failed: $($oracle.formula)"
+    }
     $cells = [ordered]@{
       A1 = '10'
       B1 = '=IF(MC.ACTIVE(),MC.POISSON(A1,"orders"),0)'
@@ -188,14 +196,25 @@ $installCompleted = $false
 $msi = $null
 $portable = $null
 $failure = $null
+$previousMsi = $null
+$previousInstallAttempted = $false
+$settingsFolder = Join-Path $env:APPDATA 'DisHubCalculo'
+$createdSettingsFolder = $false
+$createdRegistrySentinel = $false
+function Get-OwnInstalledProducts {
+  return @(Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+    Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq 'DisHub Cálculo' })
+}
 try {
+  # Refuse existing installations before inspecting artifacts or executing candidate code.
+  Assert-True (-not (Test-Path $installFolder) -and -not (Test-Path $ownRegistry) -and -not (Test-Path $ownAppPath)) 'Refuse to overwrite an existing DisHub installation.'
   $head = (git -C $root rev-parse HEAD).Trim()
   Assert-True ($LASTEXITCODE -eq 0 -and $head -eq $ExpectedCommit) 'Verification source SHA does not match this build.'
   Assert-True (-not (git -C $root status --porcelain)) 'Verification requires clean committed source.'
   $proof.sourceTree = (git -C $root rev-parse 'HEAD^{tree}').Trim()
   $edition = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'edition.json') | ConvertFrom-Json -AsHashtable
   $version = $edition.version
-  Assert-True ($version -match '^0\.1\.0-preview\.[1-9][0-9]*$') 'This gate is scoped to the first experimental preview track.'
+  Assert-True ($version -eq '0.1.1-preview.1' -and $edition.windows.msiVersion -eq '0.1.1') 'This gate requires the monotonic 0.1.1 upgrade candidate.'
   $manifestPath = Join-Path $artifacts "dishub-calculo-$version-windows-x64.manifest.json"
   $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json -AsHashtable
   Assert-True ($manifest.sourceCommit -eq $ExpectedCommit -and -not $manifest.sourceDirty) 'Candidate provenance is dirty or does not match the tested commit.'
@@ -226,10 +245,9 @@ try {
   $proof.portableCli = Test-NativeCli $portableCli[0].FullName 'portable' $version
   $versionInfo = $portableApp[0].VersionInfo
   Assert-True ($versionInfo.ProductName -eq 'DisHub Cálculo' -and $versionInfo.ProductVersion -eq $version) 'GUI VERSIONINFO has the wrong product or version.'
-  Assert-True ($versionInfo.FileMajorPart -eq 0 -and $versionInfo.FileMinorPart -eq 1 -and $versionInfo.FileBuildPart -eq 0) 'GUI numeric file version must match the 0.1.0 edition track.'
+  Assert-True ($versionInfo.FileMajorPart -eq 0 -and $versionInfo.FileMinorPart -eq 1 -and $versionInfo.FileBuildPart -eq 1) 'GUI numeric file version must match the 0.1.1 edition track.'
   $proof.guiFileMetadata = @{ productName = $versionInfo.ProductName; productVersion = $versionInfo.ProductVersion; numericFileVersion = @($versionInfo.FileMajorPart,$versionInfo.FileMinorPart,$versionInfo.FileBuildPart,$versionInfo.FilePrivatePart) }
 
-  Assert-True (-not (Test-Path $installFolder) -and -not (Test-Path $ownRegistry) -and -not (Test-Path $ownAppPath)) 'Refuse to overwrite an existing DisHub installation.'
   Assert-True (-not (Test-Path $upstreamFolder)) 'Refuse to overwrite an existing upstream folder with a sentinel.'
   foreach ($key in $sentinelKeys) { Assert-True (-not (Test-Path $key)) 'Refuse to modify an existing upstream registry key.' }
   $marker = [Guid]::NewGuid().ToString()
@@ -258,6 +276,39 @@ try {
   foreach ($key in $sentinelKeys) { Assert-True ((Get-ItemProperty -Path $key -Name 'DisHubPreviewSentinel').DisHubPreviewSentinel -eq $marker) 'Installation changed upstream registry sentinel.' }
   Assert-True ((Get-FileHash $sentinelFile -Algorithm SHA256).Hash -eq $sentinelHash) 'Installation changed upstream file sentinel.'
   $proof.installation = @{ directory = $installFolder; scope = 'current-user'; directorySelection = 'explicit isolated per-user folder'; payloadHashesMatchPortable = $true; legalNotices = $true }
+  # First verify a clean installation above, then exercise the real previous public MSI.
+  $proof.cleanInstallUninstallExitCode = Invoke-Msi @('/x', "`"$msi`"", 'ALLUSERS=""', 'MSIINSTALLPERUSER=1') 'msi-clean-uninstall.log'
+  $installCompleted = $false
+  Assert-True (-not (Test-Path $installedCli) -and -not (Test-Path $installedApp)) 'Clean uninstall left executable payloads before the upgrade gate.'
+  Assert-True (-not (Test-Path $settingsFolder)) 'Refuse to overwrite an existing settings directory in the isolated upgrade gate.'
+  $previousMsi = Join-Path $output 'dishub-calculo-0.1.0-preview.1-windows-x64.msi'
+  $previousUrl = 'https://github.com/betosaco/gridcraft/releases/download/dishub-calculo-v0.1.0-preview.1/dishub-calculo-0.1.0-preview.1-windows-x64.msi'
+  $previousHash = '5af1906b28ab04b092847d2d03e0c0fc9a13c17dc803a0b9d53ae95456abdadc'
+  Invoke-WebRequest -Uri $previousUrl -OutFile $previousMsi
+  Assert-True ((Get-FileHash $previousMsi -Algorithm SHA256).Hash.ToLowerInvariant() -eq $previousHash) 'Previous public MSI SHA256 mismatch; refuse execution.'
+  $previousInstallAttempted = $true
+  $proof.previousInstallExitCode = Invoke-Msi @('/i', "`"$previousMsi`"", 'ALLUSERS=""', 'MSIINSTALLPERUSER=1', 'DESKTOPSHORTCUT=0', "INSTALLFOLDER=`"$installFolder`"") 'msi-previous-install.log'
+  $oldProducts = @(Get-OwnInstalledProducts)
+  Assert-True ($oldProducts.Count -eq 1 -and $oldProducts[0].DisplayVersion -eq '0.1.0') 'Previous MSI registration must be uniquely version 0.1.0.'
+  $oldProductCode = $oldProducts[0].PSChildName
+  Assert-True (Test-Path $installedCli) 'Previous MSI did not install the CLI.'
+  [void](New-Item -ItemType Directory -Path $settingsFolder)
+  $createdSettingsFolder = $true
+  $settingsSentinel = Join-Path $settingsFolder 'upgrade-preservation-sentinel.txt'
+  Set-Content -LiteralPath $settingsSentinel -Value $marker -Encoding utf8
+  $settingsHash = (Get-FileHash $settingsSentinel -Algorithm SHA256).Hash
+  [void](New-ItemProperty -Path $ownRegistry -Name 'UpgradePreservationSentinel' -Value $marker -PropertyType String)
+  $createdRegistrySentinel = $true
+  $proof.upgradeExitCode = Invoke-Msi @('/i', "`"$msi`"", 'ALLUSERS=""', 'MSIINSTALLPERUSER=1', 'DESKTOPSHORTCUT=0', "INSTALLFOLDER=`"$installFolder`"") 'msi-upgrade.log'
+  $installCompleted = $true
+  $newProducts = @(Get-OwnInstalledProducts)
+  Assert-True ($newProducts.Count -eq 1 -and $newProducts[0].DisplayVersion -eq '0.1.1' -and $newProducts[0].PSChildName -ne $oldProductCode) 'Upgrade must remove the old ProductCode and register only the new 0.1.1 product.'
+  Assert-True ((Get-FileHash $installedCli -Algorithm SHA256).Hash -eq (Get-FileHash $portableCli[0].FullName -Algorithm SHA256).Hash) 'Upgrade installed a different CLI from the tested candidate.'
+  Assert-True ((Get-FileHash $installedApp -Algorithm SHA256).Hash -eq (Get-FileHash $portableApp[0].FullName -Algorithm SHA256).Hash) 'Upgrade installed a different GUI from the tested candidate.'
+  Assert-True ((Get-FileHash $settingsSentinel -Algorithm SHA256).Hash -eq $settingsHash) 'Upgrade changed the user settings sentinel.'
+  Assert-True ((Get-ItemProperty -Path $ownRegistry -Name 'UpgradePreservationSentinel').UpgradePreservationSentinel -eq $marker) 'Upgrade changed user registry settings.'
+  $proof.upgradedCli = Test-NativeCli $installedCli 'upgraded' $version
+  $proof.previousVersionUpgrade = @{ status = 'PASS'; previousVersion = '0.1.0'; newVersion = '0.1.1'; previousUrl = $previousUrl; previousSha256 = $previousHash; oldProductRemoved = $true; uniqueNewProduct = $true; payloadHashesMatchPortable = $true; settingsPreserved = $true }
   $proof.artifacts = $artifactProofs
 } catch {
   $failure = $_
@@ -272,16 +323,32 @@ try {
       if (Test-Path $ownRegistry) { Assert-True ($null -eq (Get-ItemProperty -Path $ownRegistry).PSObject.Properties['InstallDir']) 'Uninstall left the own InstallDir registration.' }
       foreach ($key in $createdSentinelKeys) { Assert-True ((Get-ItemProperty -Path $key -Name 'DisHubPreviewSentinel').DisHubPreviewSentinel -eq $marker) 'Uninstall changed upstream registry sentinel.' }
       Assert-True ((Get-FileHash $sentinelFile -Algorithm SHA256).Hash -eq $sentinelHash) 'Uninstall changed upstream file sentinel.'
-      $proof.uninstallation = 'PASS: own payload and application registration removed'
+      Assert-True (@(Get-OwnInstalledProducts).Count -eq 0) 'Uninstall left a DisHub product registration.'
+      if ($createdSettingsFolder) { Assert-True ((Get-FileHash $settingsSentinel -Algorithm SHA256).Hash -eq $settingsHash) 'Uninstall changed user settings.' }
+      $proof.uninstallation = 'PASS: own payload and application registration removed; user settings preserved'
       $proof.coexistence = 'PASS: independently created upstream file/registry sentinels unchanged after install and uninstall; not a real upstream app installation'
     } catch {
       if ($null -eq $failure) { $failure = $_ }
       $proof.cleanupError = $_.ToString()
     }
   }
+  if ($previousInstallAttempted -and $null -ne $previousMsi) {
+    try { $proof.previousCleanupExitCode = Invoke-Msi @('/x', "`"$previousMsi`"", 'ALLUSERS=""', 'MSIINSTALLPERUSER=1') 'msi-previous-cleanup.log' @(0,3010,1605) }
+    catch { if ($null -eq $failure) { $failure = $_ }; $proof.previousCleanupError = $_.ToString() }
+  }
   # Only remove keys/folder created after the explicit absence checks above, never any
   # parent namespace or an existing application. This does not clean failed fork payloads.
   try {
+    if ($createdSettingsFolder -and (Test-Path -LiteralPath $settingsFolder)) {
+      Remove-Item -LiteralPath $settingsSentinel -Force
+      if (@(Get-ChildItem -LiteralPath $settingsFolder -Force).Count -eq 0) { Remove-Item -LiteralPath $settingsFolder }
+    }
+    if ($createdRegistrySentinel -and (Test-Path $ownRegistry)) {
+      $sentinelProperty = (Get-ItemProperty -LiteralPath $ownRegistry).PSObject.Properties['UpgradePreservationSentinel']
+      if ($null -ne $sentinelProperty -and $sentinelProperty.Value -eq $marker) {
+        Remove-ItemProperty -LiteralPath $ownRegistry -Name 'UpgradePreservationSentinel'
+      }
+    }
     foreach ($key in $createdSentinelKeys) {
       if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
     }
@@ -295,4 +362,4 @@ try {
   Save-Proof
 }
 if ($null -ne $failure) { throw $failure }
-Write-Output "PASS Windows x64 experimental candidate: native 95 ACT + 6 MC, real MSI install/uninstall, sentinel coexistence. Proof: $proofPath"
+Write-Output "PASS Windows x64 experimental candidate: native 95 ACT + 6 MC, real MSI clean install/uninstall and 0.1.0-to-0.1.1 upgrade, sentinel coexistence. Proof: $proofPath"
