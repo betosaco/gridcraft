@@ -210,14 +210,14 @@ function Get-MsiIdentity([string] $Path) {
     $query = 'SELECT `Value` FROM `Property` WHERE `Property` = ''{0}''' -f $property
     $view = $database.OpenView($query)
     try {
-      $view.Execute()
+      [void]$view.Execute()
       $record = $view.Fetch()
       Assert-True ($null -ne $record) "MSI is missing required identity property: $property"
       $identity[$property] = $record.StringData(1)
-    } finally { $view.Close() }
+    } finally { [void]$view.Close() }
   }
   Assert-True ($identity.UpgradeCode -eq '{05C18FF9-F9BE-5BD2-968F-4C229F64BD17}' -and $identity.ProductName -eq 'DisHub Cálculo') 'MSI has an unexpected product family/name.'
-  return $identity
+  return ,$identity
 }
 function Get-OwnInstalledProducts {
   # MSI is authoritative; a particular Add/Remove Programs registry path is not its API.
