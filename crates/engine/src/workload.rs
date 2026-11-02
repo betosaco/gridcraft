@@ -22,6 +22,19 @@ pub const MAX_REPORT_CELLS: usize = 2_000_000;
 pub const MAX_REPORT_SHEETS: usize = 128;
 const WINDOW_MS: f64 = 60_000.0;
 
+/// Updates a relaxed counter using MSRV-compatible atomics; the closure may retry after a race.
+/// Returns the previous value on success or the observed value when the closure declines a write.
+fn update_counter(counter: &AtomicU64, mut update: impl FnMut(u64) -> Option<u64>) -> std::result::Result<u64, u64> {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let Some(next) = update(current) else { return Err(current) };
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(previous) => return Ok(previous),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
 /// A cloneable cooperative cancellation signal. It never mutates the source workbook.
 #[derive(Clone, Debug, Default)]
 pub struct Cancellation(Arc<AtomicU8>);
@@ -234,9 +247,7 @@ impl Meter {
         if limit == 0 || self.state.spent.load(Ordering::Relaxed) != 0 {
             return Err(EngineError::Other("Configure a positive work limit before starting the run.".into()));
         }
-        self.state
-            .limit
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |old| (limit <= old).then_some(limit))
+        update_counter(&self.state.limit, |old| (limit <= old).then_some(limit))
             .map(|_| ())
             .map_err(|_| EngineError::Other("The configured work limit can only be lowered.".into()))
     }
@@ -268,7 +279,7 @@ impl Meter {
     /// Consumes already-paid credit without locks or clock reads when its window is current.
     fn take_credit(&self, budget: &AnalysisBudget, units: u64) -> bool {
         self.state.credit_generation.load(Ordering::Acquire) == budget.0.generation.load(Ordering::Acquire)
-            && self.state.credit.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |credit| credit.checked_sub(units)).is_ok()
+            && update_counter(&self.state.credit, |credit| credit.checked_sub(units)).is_ok()
     }
 
     /// Serializes only renewal, expires observed old-window credit and pays before native work.
@@ -299,8 +310,7 @@ impl Meter {
             return Ok(());
         }
         let limit = self.state.limit.load(Ordering::Relaxed);
-        if self.state.spent.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| used.checked_add(units).filter(|next| *next <= limit)).is_err()
-        {
+        if update_counter(&self.state.spent, |used| used.checked_add(units).filter(|next| *next <= limit)).is_err() {
             return self.refuse(REFUSED_RUN);
         }
         if let Some(budget) = &self.state.budget
@@ -340,6 +350,24 @@ pub(crate) fn report_capacity(wb: &Workbook, additional_cells: usize) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lost compare-exchange retries from the current value, and refusal never writes.
+    #[test]
+    fn counter_updates_retry_after_interference_and_leave_refusals_unchanged() {
+        let counter = AtomicU64::new(10);
+        let mut interfere = true;
+        let previous = update_counter(&counter, |current| {
+            if interfere {
+                interfere = false;
+                counter.fetch_add(2, Ordering::Relaxed);
+            }
+            current.checked_add(3)
+        });
+        assert_eq!(previous, Ok(12));
+        assert_eq!(counter.load(Ordering::Relaxed), 15);
+        assert_eq!(update_counter(&counter, |_| None), Err(15));
+        assert_eq!(counter.load(Ordering::Relaxed), 15);
+    }
 
     /// A conservative 50k prefix-sum bound fits bulk work while both entry policies stay finite.
     #[test]

@@ -206,7 +206,7 @@ fn monte_carlo_latin_hypercubes_preserve_strata_and_use_replica_error() {
     let plan = sampling::Plan::parse(&json!({"method":"latinHypercube","replicates":8}), 1, 1024).unwrap();
     let inputs = [Input { sheet: 0, cell: CellRef::new(0, 0), label: "A1".into(), distribution: Distribution::Uniform(0., 1.) }];
     let samples = plan.sample(&inputs, 42).unwrap();
-    for replica in samples[0].chunks_exact(128) {
+    for replica in samples[0].as_chunks::<128>().0 {
         let mut bins = replica.iter().map(|x| (x * 128.).floor() as usize).collect::<Vec<_>>();
         bins.sort();
         assert_eq!(bins, (0..128).collect::<Vec<_>>());
