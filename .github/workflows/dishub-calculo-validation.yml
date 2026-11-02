@@ -27,8 +27,8 @@ jobs:
         libgtk-3-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
       command: |
         set -euo pipefail
-        expected_commit=e79bc198a127215f24f1e03ecf93adf4f6f7b2a9
-        expected_tree=cfc230aa48519741683b6b4705a9a9edf12f0fe5
+        expected_commit=a1ebdf598b021ed11916cfc3b5ad12f24066ee99
+        expected_tree=cd90452940127a704786aeac5c3f5dff0c79aca5
         git fetch --depth=1 https://github.com/betosaco/gridcraft.git "$expected_commit"
         git checkout --detach "$expected_commit"
         test "$(git rev-parse HEAD)" = "$expected_commit"
