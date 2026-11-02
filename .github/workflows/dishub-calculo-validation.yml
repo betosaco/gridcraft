@@ -1,0 +1,42 @@
+name: DisHub Calculo — exact 0.15 candidate quality gates
+
+# Validation-only branch: the tested source is the immutable distribution commit,
+# not this wrapper commit. No release, installer rebuild or protected-branch write.
+on:
+  push:
+    branches: [validation/dishub-calculo-0150-ci]
+    paths: [.github/workflows/dishub-calculo-validation.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dishub-calculo-exact-0150-quality-gates
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.repository == 'betosaco/gridcraft' && github.ref == 'refs/heads/validation/dishub-calculo-0150-ci'
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      timeout-minutes: 90
+      packages: >-
+        pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+        libgtk-3-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
+      command: |
+        set -euo pipefail
+        expected_commit=e79bc198a127215f24f1e03ecf93adf4f6f7b2a9
+        expected_tree=cfc230aa48519741683b6b4705a9a9edf12f0fe5
+        git fetch --depth=1 https://github.com/betosaco/gridcraft.git "$expected_commit"
+        git checkout --detach "$expected_commit"
+        test "$(git rev-parse HEAD)" = "$expected_commit"
+        test "$(git rev-parse 'HEAD^{tree}')" = "$expected_tree"
+        test -z "$(git status --porcelain --untracked-files=no)"
+        echo "EXACT_SOURCE_BEFORE=$expected_commit TREE=$expected_tree"
+        cargo xtask ci
+        test "$(git rev-parse HEAD)" = "$expected_commit"
+        test "$(git rev-parse 'HEAD^{tree}')" = "$expected_tree"
+        test -z "$(git status --porcelain --untracked-files=no)"
+        echo "EXACT_SOURCE_AFTER=$expected_commit TREE=$expected_tree STOCK_CI=PASS"
