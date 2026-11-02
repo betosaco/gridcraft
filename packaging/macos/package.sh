@@ -14,7 +14,7 @@
 #   APPLE_ID, APPLE_PASSWORD (app-specific password), APPLE_TEAM_ID
 set -euo pipefail
 # shellcheck source=../env.sh
-export DISHUB_CALCULO_VERSION="${DISHUB_CALCULO_VERSION:-0.1.1-preview.1}"
+export DISHUB_CALCULO_VERSION="${DISHUB_CALCULO_VERSION:-0.1.2-preview.1}"
 export GRIDCRAFT_VERSION="$DISHUB_CALCULO_VERSION"
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/macos"
@@ -197,8 +197,8 @@ cat >"$DIST/dishub-calculo-$VERSION-macos-$ARCH.manifest.json" <<EOF
   "schemaVersion": 1,
   "product": "DisHub Cálculo",
   "version": "$VERSION",
-  "upstreamVersion": "0.14.2",
-  "upstreamCommit": "55850841d39f030fb42f0a07e54903decea7b067",
+  "upstreamVersion": "0.15.0",
+  "upstreamCommit": "30b210b4ef03b30616923465efa70766cefba379",
   "sourceCommit": "$GRIDCRAFT_BUILD_SHA",
   "sourceDirty": $SOURCE_DIRTY,
   "os": "macos",

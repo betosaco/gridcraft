@@ -1,0 +1,75 @@
+name: DisHub Calculo preview — macOS ARM64
+
+# Isolated experimental distribution target; no release, signing secrets or updater.
+on:
+  push:
+    branches: [distribution/dishub-calculo-0150]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dishub-calculo-preview-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-arm64:
+    if: github.repository == 'betosaco/gridcraft' && github.ref == 'refs/heads/distribution/dishub-calculo-0150'
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: '3'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
+      CARGO_PROFILE_RELEASE_DEBUG: '0'
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: '2'
+      DIST: ${{ github.workspace }}/dist/release
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      CRAFT_FONTS_REQUIRED: '1'
+      GRIDCRAFT_BUILD_SHA: ${{ github.sha }}
+      MACOS_SIGN_IDENTITY: '-'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out pinned official fonts
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
+        with:
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      - name: Check out suite translations
+        uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: dishub-calculo-preview-macos-arm64
+      - name: Verify architecture and source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          export GRIDCRAFT_BUILD_DATE="$(date -u +%Y-%m-%d)"
+          echo "GRIDCRAFT_BUILD_DATE=$GRIDCRAFT_BUILD_DATE" >> "$GITHUB_ENV"
+      - name: Build experimental ad-hoc package
+        shell: bash
+        run: bash packaging/macos/package.sh --arch aarch64
+      - name: Verify mounted and copied package plus native CLI and GUI
+        shell: bash
+        run: python3 distribution/verify-macos-preview.py --dist "$DIST" --output "$RUNNER_TEMP/dishub-calculo-macos-proof" --expected-commit "$GITHUB_SHA"
+      - name: Verify clean source after packaging
+        shell: bash
+        run: test -z "$(git status --porcelain)"
+      - name: Upload experimental packages and exact proofs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dishub-calculo-preview-macos-arm64-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            dist/release/*
+            ${{ runner.temp }}/dishub-calculo-macos-proof/**

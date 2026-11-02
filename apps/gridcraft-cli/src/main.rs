@@ -66,7 +66,7 @@ fn main() -> ExitCode {
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {
         Some("--version" | "-V" | "version") => {
-            outln!("dishub-calculo-cli {} (GridCraft base 0.14.2)", env!("CARGO_PKG_VERSION"));
+            outln!("dishub-calculo-cli {} (GridCraft base 0.15.0)", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some("--help" | "-h" | "help") => {

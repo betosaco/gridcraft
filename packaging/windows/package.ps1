@@ -32,8 +32,8 @@ function Invoke-Native([string] $What, [scriptblock] $Block) {
   if ($LASTEXITCODE -ne 0) { throw "$What failed with exit code $LASTEXITCODE" }
 }
 
-# This edition has a release track independent from its GridCraft 0.14.2 base.
-$Version = if ($env:DISHUB_CALCULO_VERSION) { $env:DISHUB_CALCULO_VERSION } else { '0.1.1-preview.1' }
+# This edition has a release track independent from its GridCraft 0.15.0 base.
+$Version = if ($env:DISHUB_CALCULO_VERSION) { $env:DISHUB_CALCULO_VERSION } else { '0.1.2-preview.1' }
 $env:DISHUB_CALCULO_VERSION = $Version
 $sourceManifest = Get-Content -Raw -LiteralPath (Join-Path $Root 'Cargo.toml')
 if ($sourceManifest -notmatch '(?ms)^\[workspace\.package\]\s*\r?\nversion\s*=\s*"([^"\r\n]+)"' -or $Matches[1] -ne $Version) {
@@ -158,8 +158,8 @@ $manifest = @{
   product = 'DisHub Cálculo'
   version = $Version
   msiVersion = $MsiVersion
-  upstreamVersion = '0.14.2'
-  upstreamCommit = '55850841d39f030fb42f0a07e54903decea7b067'
+  upstreamVersion = '0.15.0'
+  upstreamCommit = '30b210b4ef03b30616923465efa70766cefba379'
   sourceCommit = $env:GRIDCRAFT_BUILD_SHA
   sourceDirty = [bool](git -C $Root status --porcelain)
   os = 'windows'
