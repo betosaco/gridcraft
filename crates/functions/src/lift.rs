@@ -142,35 +142,6 @@ fn native_call(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     if ctx.charge_work(0) { value } else { Value::Error(CellError::Num) }
 }
 
-/// Lookups whose every call searches a lookup vector from its start, so a call lifted over `n`
-/// needles does `n` x (vector length) work. Their search arguments don't lift.
-const SCANS: &[&str] = &["VLOOKUP", "HLOOKUP", "LOOKUP", "MATCH", "XLOOKUP", "XMATCH"];
-
-/// Work budget of a lifted [`SCANS`] lookup: needle cells times the length of the longest vector
-/// it searches (the longest dimension of its largest non-lifted array). Each needle re-reads and
-/// scans the vector (about 8 ns per entry), so without a cap a one-cell formula such as
-/// `XMATCH(SEQUENCE(1048576), -SEQUENCE(1048576))` runs for hours and hangs opening the file.
-/// Past the budget the call is `#NUM!`, as MMULT is past 2e9 multiply-adds. 5e8 keeps the worst
-/// case to a few seconds and still admits 5,000 needles over a 100,000-row table.
-const LIFTED_SCAN_BUDGET: usize = 500_000_000;
-
-/// The length of the longest vector a lifted call of `spec` searches per needle: 0 unless `spec`
-/// is one of the [`SCANS`] lookups and a non-lifted argument is an array.
-fn scan_len(spec: &FnSpec, args: &[Arg]) -> usize {
-    if !SCANS.contains(&spec.name) {
-        return 0;
-    }
-    args.iter()
-        .enumerate()
-        .filter(|(i, _)| !spec.is_scalar_arg(*i))
-        .filter_map(|(_, a)| match &a.value {
-            Value::Array(arr) => Some(arr.rows.max(arr.cols)),
-            _ => None,
-        })
-        .max()
-        .unwrap_or(0)
-}
-
 pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     call_lifted_within(spec, args, ctx, LIFTED_SCAN_BUDGET)
 }
