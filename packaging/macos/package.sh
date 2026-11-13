@@ -14,7 +14,7 @@
 #   APPLE_ID, APPLE_PASSWORD (app-specific password), APPLE_TEAM_ID
 set -euo pipefail
 # shellcheck source=../env.sh
-export DISHUB_CALCULO_VERSION="${DISHUB_CALCULO_VERSION:-0.1.2-preview.1}"
+export DISHUB_CALCULO_VERSION="${DISHUB_CALCULO_VERSION:-0.1.3-preview.1}"
 export GRIDCRAFT_VERSION="$DISHUB_CALCULO_VERSION"
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/macos"

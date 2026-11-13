@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "DisHub Cálculo",
-  "version": "0.1.2-preview.1",
+  "version": "0.1.3-preview.1",
   "firstStableVersion": null,
   "upstream": {
     "name": "GridCraft",
@@ -18,7 +18,7 @@
   "windows": {
     "executable": "dishub-calculo.exe",
     "cli": "dishub-calculo-cli.exe",
-    "msiVersion": "0.1.2",
+    "msiVersion": "0.1.3",
     "upgradeCode": "05C18FF9-F9BE-5BD2-968F-4C229F64BD17",
     "applicationComponentGuid": "3930E8EA-AA9C-5DB4-94C3-124AC6EBE3A1",
     "registryRoot": "Software\\DisHubCalculo",
@@ -37,11 +37,11 @@
   },
   "publicAssets": [],
   "releaseChannel": "experimental",
-  "nextPublicMsiVersionMinimum": "0.1.3",
+  "nextPublicMsiVersionMinimum": "0.1.4",
   "signingPolicy": {
     "macos": "ad-hoc, not notarized; label explicitly",
     "windows": "unsigned; label explicitly"
   },
   "sourceReleaseCommit": null,
-  "proposedReleaseTag": "dishub-calculo-v0.1.2-preview.1"
+  "proposedReleaseTag": "dishub-calculo-v0.1.3-preview.1"
 }

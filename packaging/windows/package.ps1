@@ -33,7 +33,7 @@ function Invoke-Native([string] $What, [scriptblock] $Block) {
 }
 
 # This edition has a release track independent from its GridCraft 0.19.1 base.
-$Version = if ($env:DISHUB_CALCULO_VERSION) { $env:DISHUB_CALCULO_VERSION } else { '0.1.2-preview.1' }
+$Version = if ($env:DISHUB_CALCULO_VERSION) { $env:DISHUB_CALCULO_VERSION } else { '0.1.3-preview.1' }
 $env:DISHUB_CALCULO_VERSION = $Version
 $sourceManifest = Get-Content -Raw -LiteralPath (Join-Path $Root 'Cargo.toml')
 if ($sourceManifest -notmatch '(?ms)^\[workspace\.package\]\s*\r?\nversion\s*=\s*"([^"\r\n]+)"' -or $Matches[1] -ne $Version) {

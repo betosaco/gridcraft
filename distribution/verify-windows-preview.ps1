@@ -274,7 +274,7 @@ try {
   $proof.sourceTree = (git -C $root rev-parse 'HEAD^{tree}').Trim()
   $edition = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'edition.json') | ConvertFrom-Json -AsHashtable
   $version = $edition.version
-  Assert-True ($version -eq '0.1.2-preview.1' -and $edition.windows.msiVersion -eq '0.1.2') 'This gate requires the monotonic 0.1.2 upgrade candidate.'
+  Assert-True ($version -eq '0.1.3-preview.1' -and $edition.windows.msiVersion -eq '0.1.3') 'This gate requires the monotonic 0.1.3 upgrade candidate.'
   $manifestPath = Join-Path $artifacts "dishub-calculo-$version-windows-x64.manifest.json"
   $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json -AsHashtable
   Assert-True ($manifest.sourceCommit -eq $ExpectedCommit -and -not $manifest.sourceDirty) 'Candidate provenance is dirty or does not match the tested commit.'
@@ -296,7 +296,7 @@ try {
   $artifactProofs | ForEach-Object { "$($_.sha256)  $($_.filename)" } | Set-Content -Encoding ascii -LiteralPath (Join-Path $output 'SHA256SUMS.txt')
   $msi = Join-Path $artifacts "dishub-calculo-$version-windows-x64.msi"
   $candidateIdentity = Get-MsiIdentity $msi
-  Assert-True ($candidateIdentity.ProductVersion -eq '0.1.2') 'Candidate MSI numeric version must be 0.1.2.'
+  Assert-True ($candidateIdentity.ProductVersion -eq '0.1.3') 'Candidate MSI numeric version must be 0.1.3.'
   $zip = Join-Path $artifacts "dishub-calculo-$version-windows-x64-portable.zip"
   Assert-True ((Get-AuthenticodeSignature -LiteralPath $msi).Status -eq 'NotSigned') 'This unsigned-preview workflow must not imply commercial signing.'
   $portable = Join-Path $output 'portable'
@@ -307,7 +307,7 @@ try {
   $proof.portableCli = Test-NativeCli $portableCli[0].FullName 'portable' $version
   $versionInfo = $portableApp[0].VersionInfo
   Assert-True ($versionInfo.ProductName -eq 'DisHub Cálculo' -and $versionInfo.ProductVersion -eq $version) 'GUI VERSIONINFO has the wrong product or version.'
-  Assert-True ($versionInfo.FileMajorPart -eq 0 -and $versionInfo.FileMinorPart -eq 1 -and $versionInfo.FileBuildPart -eq 2) 'GUI numeric file version must match the 0.1.2 edition track.'
+  Assert-True ($versionInfo.FileMajorPart -eq 0 -and $versionInfo.FileMinorPart -eq 1 -and $versionInfo.FileBuildPart -eq 3) 'GUI numeric file version must match the 0.1.3 edition track.'
   $proof.guiFileMetadata = @{ productName = $versionInfo.ProductName; productVersion = $versionInfo.ProductVersion; numericFileVersion = @($versionInfo.FileMajorPart,$versionInfo.FileMinorPart,$versionInfo.FileBuildPart,$versionInfo.FilePrivatePart) }
 
   Assert-True (-not (Test-Path $upstreamFolder)) 'Refuse to overwrite an existing upstream folder with a sentinel.'
@@ -344,19 +344,19 @@ try {
   $installAttempted = $false
   Assert-True (-not (Test-Path $installedCli) -and -not (Test-Path $installedApp)) 'Clean uninstall left executable payloads before the upgrade gate.'
   Assert-True (-not (Test-Path $settingsFolder)) 'Refuse to overwrite an existing settings directory in the isolated upgrade gate.'
-  $previousMsi = Join-Path $output 'dishub-calculo-0.1.1-preview.1-windows-x64.msi'
-  $previousUrl = 'https://github.com/betosaco/gridcraft/releases/download/dishub-calculo-v0.1.1-preview.1/dishub-calculo-0.1.1-preview.1-windows-x64.msi'
-  $previousHash = '81f816f5390c1614983fa3a575bf24f8272b3b409f7de0806c0bbd37f1c418a0'
+  $previousMsi = Join-Path $output 'dishub-calculo-0.1.2-preview.1-windows-x64.msi'
+  $previousUrl = 'https://github.com/betosaco/gridcraft/releases/download/dishub-calculo-v0.1.2-preview.1/dishub-calculo-0.1.2-preview.1-windows-x64.msi'
+  $previousHash = 'b702e9b961cfe9b044560ec567bb736df73cfc527ae467c0bcf966b8442eccc1'
   Invoke-WebRequest -Uri $previousUrl -OutFile $previousMsi
   Assert-True ((Get-FileHash $previousMsi -Algorithm SHA256).Hash.ToLowerInvariant() -eq $previousHash) 'Previous public MSI SHA256 mismatch; refuse execution.'
   $previousIdentity = Get-MsiIdentity $previousMsi
-  Assert-True ($previousIdentity.ProductVersion -eq '0.1.1' -and $previousIdentity.ProductCode -ne $candidateIdentity.ProductCode) 'Previous MSI must be 0.1.1 with a different ProductCode.'
+  Assert-True ($previousIdentity.ProductVersion -eq '0.1.2' -and $previousIdentity.ProductCode -ne $candidateIdentity.ProductCode) 'Previous MSI must be 0.1.2 with a different ProductCode.'
   $proof.msiIdentities = @{ previous = $previousIdentity; candidate = $candidateIdentity }
   $previousInstallAttempted = $true
   $proof.previousInstallExitCode = Invoke-Msi @('/i', "`"$previousMsi`"", 'ALLUSERS=""', 'MSIINSTALLPERUSER=1', 'DESKTOPSHORTCUT=0', "INSTALLFOLDER=`"$installFolder`"") 'msi-previous-install.log'
   $oldProducts = @(Get-OwnInstalledProducts)
   $proof.previousProductInventory = $oldProducts
-  Assert-True ($oldProducts.Count -eq 1 -and $oldProducts[0].DisplayVersion -eq '0.1.1' -and $oldProducts[0].PSChildName -eq $previousIdentity.ProductCode) 'Previous MSI registration must be uniquely version 0.1.1.'
+  Assert-True ($oldProducts.Count -eq 1 -and $oldProducts[0].DisplayVersion -eq '0.1.2' -and $oldProducts[0].PSChildName -eq $previousIdentity.ProductCode) 'Previous MSI registration must be uniquely version 0.1.2.'
   $oldProductCode = $oldProducts[0].PSChildName
   Assert-True (Test-Path $installedCli) 'Previous MSI did not install the CLI.'
   [void](New-Item -ItemType Directory -Path $settingsFolder)
@@ -371,13 +371,13 @@ try {
   $installCompleted = $true
   $newProducts = @(Get-OwnInstalledProducts)
   $proof.upgradedProductInventory = $newProducts
-  Assert-True ($newProducts.Count -eq 1 -and $newProducts[0].DisplayVersion -eq '0.1.2' -and $newProducts[0].PSChildName -eq $candidateIdentity.ProductCode -and $newProducts[0].PSChildName -ne $oldProductCode) 'Upgrade must remove the old ProductCode and register only the new 0.1.2 product.'
+  Assert-True ($newProducts.Count -eq 1 -and $newProducts[0].DisplayVersion -eq '0.1.3' -and $newProducts[0].PSChildName -eq $candidateIdentity.ProductCode -and $newProducts[0].PSChildName -ne $oldProductCode) 'Upgrade must remove the old ProductCode and register only the new 0.1.3 product.'
   Assert-True ((Get-FileHash $installedCli -Algorithm SHA256).Hash -eq (Get-FileHash $portableCli[0].FullName -Algorithm SHA256).Hash) 'Upgrade installed a different CLI from the tested candidate.'
   Assert-True ((Get-FileHash $installedApp -Algorithm SHA256).Hash -eq (Get-FileHash $portableApp[0].FullName -Algorithm SHA256).Hash) 'Upgrade installed a different GUI from the tested candidate.'
   Assert-True ((Get-FileHash $settingsSentinel -Algorithm SHA256).Hash -eq $settingsHash) 'Upgrade changed the user settings sentinel.'
   Assert-True ((Get-ItemProperty -Path $ownRegistry -Name 'UpgradePreservationSentinel').UpgradePreservationSentinel -eq $marker) 'Upgrade changed user registry settings.'
   $proof.upgradedCli = Test-NativeCli $installedCli 'upgraded' $version
-  $proof.previousVersionUpgrade = @{ status = 'PASS'; previousVersion = '0.1.1'; newVersion = '0.1.2'; previousUrl = $previousUrl; previousSha256 = $previousHash; oldProductRemoved = $true; uniqueNewProduct = $true; payloadHashesMatchPortable = $true; settingsPreserved = $true }
+  $proof.previousVersionUpgrade = @{ status = 'PASS'; previousVersion = '0.1.2'; newVersion = '0.1.3'; previousUrl = $previousUrl; previousSha256 = $previousHash; oldProductRemoved = $true; uniqueNewProduct = $true; payloadHashesMatchPortable = $true; settingsPreserved = $true }
   $proof.artifacts = $artifactProofs
 } catch {
   $failure = $_
@@ -431,4 +431,4 @@ try {
   Save-Proof
 }
 if ($null -ne $failure) { throw $failure }
-Write-Output "PASS Windows x64 experimental candidate: native 95 ACT + 6 MC, real MSI clean install/uninstall and 0.1.1-to-0.1.2 upgrade, sentinel coexistence. Proof: $proofPath"
+Write-Output "PASS Windows x64 experimental candidate: native 95 ACT + 6 MC, real MSI clean install/uninstall and 0.1.2-to-0.1.3 upgrade, sentinel coexistence. Proof: $proofPath"
