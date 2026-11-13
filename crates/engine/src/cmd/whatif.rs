@@ -210,6 +210,19 @@ impl Trial {
         Trial { base, calc, meter }
     }
 
+    /// Upper bound on spill entries copied when sheet storage is made mutable.
+    pub(crate) fn spill_copy_work(&self) -> u64 {
+        self.base.sheets.iter().fold(0u64, |sum, sheet| sum.saturating_add(sheet.spill.len() as u64))
+    }
+
+    /// Recalculate a private baseline so stale cached precedents cannot affect trials.
+    pub(crate) fn refresh_baseline(&mut self) -> Result<()> {
+        self.charge(self.spill_copy_work().saturating_add(self.calc.formula_count() as u64))?;
+        let _scope = self.meter.hook().enter().ok_or_else(|| EngineError::Other("Cannot enter analysis work scope.".into()))?;
+        self.calc.recalc_all(&mut self.base);
+        self.check()
+    }
+
     /// Charges preparation/evaluation work before execution and remembers any terminal failure.
     pub(crate) fn charge(&mut self, units: u64) -> Result<()> {
         self.meter.charge(units)
@@ -231,7 +244,8 @@ impl Trial {
 
     /// Sets `sets` to constants, recalculates their dependents and reads `reads`.
     pub(crate) fn run(&mut self, sets: &[(usize, CellRef, Value)], reads: &[(usize, CellRef)]) -> Result<Vec<Value>> {
-        let units = self.calc.formula_count().saturating_add(sets.len()).saturating_add(reads.len()).saturating_add(1) as u64;
+        let units = (self.calc.formula_count().saturating_add(sets.len()).saturating_add(reads.len()).saturating_add(1) as u64)
+            .saturating_add(self.spill_copy_work());
         self.charge(units)?;
         let _scope = self.meter.hook().enter().ok_or_else(|| EngineError::Other("Cannot enter analysis work scope.".into()))?;
         let mut wb = self.base.clone();
@@ -239,7 +253,7 @@ impl Trial {
         for (si, c, v) in sets {
             if let Some(sh) = wb.sheet_mut(*si) {
                 let style = sh.style_id(*c);
-                sh.set_cell(*c, Cell { value: v.clone(), formula: None, style });
+                sh.set_cell(*c, Cell { value: v.clone(), formula: None, style, py: None });
                 keys.push((*si, *c));
             }
         }
@@ -357,7 +371,8 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     if !has_formula(ssi, set) {
         return Err(EngineError::Other("Cell must contain a formula.".into()));
     }
-    if has_formula(csi, chg) {
+    // A Python cell is a formula to Excel (`=PY(…)`): writing a number over it would lose its code.
+    if has_formula(csi, chg) || d.wb.sheet(csi).and_then(|sh| sh.cell(chg)).is_some_and(|c| c.py.is_some()) {
         return Err(EngineError::Other("Cell must contain a value.".into()));
     }
     let x0 = d.wb.sheet(csi).map(|sh| sh.value(chg)).and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -376,7 +391,7 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let sh = cx.sheet_mut(csi)?;
         let style = sh.style_id(chg);
-        sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style });
+        sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style, py: None });
         cx.touch(csi, chg);
         Ok(())
     })?;
@@ -457,7 +472,7 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
         for (c, v) in out {
             let sh = cx.sheet_mut(si)?;
             let style = sh.style_id(c);
-            sh.set_cell(c, Cell { value: v, formula: None, style });
+            sh.set_cell(c, Cell { value: v, formula: None, style, py: None });
             cx.touch(si, c);
         }
         Ok(())

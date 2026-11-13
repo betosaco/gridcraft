@@ -1,5 +1,43 @@
 //! Thin editor for the engine's generic Monte Carlo command.
-use super::{Dialog, Json, Map, json};
+use super::ref_edit::{RefLabel, ref_edit};
+use super::{Dialog, Json, Map, SheetApp, json};
+
+/// Reads the configuration only from a recognizable Monte Carlo report on the active sheet.
+/// Invalid or edited report data is left to the user rather than silently run as defaults.
+pub(super) fn saved_configuration(sheet: &gridcraft_engine::model::Sheet) -> Option<Result<Json, &'static str>> {
+    use gridcraft_engine::core::{CellRef, Value};
+    if !matches!(sheet.value(CellRef::new(0, 0)), Value::Text(ref t) if t.as_ref() == "Monte Carlo simulation")
+        || !matches!(sheet.value(CellRef::new(3, 0)), Value::Text(ref t) if t.as_ref() == "Reusable configuration (JSON)")
+    {
+        return None;
+    }
+    let Value::Text(text) = sheet.value(CellRef::new(3, 1)) else { return Some(Err("The saved Monte Carlo configuration is missing.")) };
+    Some(serde_json::from_str::<Json>(&text).ok().filter(Json::is_object).ok_or("The saved Monte Carlo configuration is invalid."))
+}
+
+/// Converts the stored output list to the dialog's line editor while retaining other settings.
+pub(super) fn load_configuration(dialog: &mut Dialog, config: Json) -> Result<(), &'static str> {
+    let mut values = config.as_object().cloned().ok_or("The saved Monte Carlo configuration is invalid.")?;
+    let outputs = values
+        .get("outputs")
+        .and_then(Json::as_array)
+        .filter(|outputs| !outputs.is_empty() && outputs.len() <= 64)
+        .ok_or("The saved Monte Carlo outputs are invalid.")?;
+    let lines = outputs.iter().map(Json::as_str).collect::<Option<Vec<_>>>().ok_or("The saved Monte Carlo outputs are invalid.")?;
+    if !values
+        .get("inputs")
+        .and_then(Json::as_array)
+        .is_some_and(|inputs| !inputs.is_empty() && inputs.len() <= 32 && inputs.iter().all(Json::is_object))
+    {
+        return Err("The saved Monte Carlo inputs are invalid.");
+    }
+    let outputs_text = lines.join("\n");
+    values.insert("outputs".into(), json!(outputs_text));
+    values.remove("newSheet");
+    dialog.values = values;
+    dialog.title = "Edit Monte Carlo Simulation".into();
+    Ok(())
+}
 
 /// Starts a uniform input without preloading parameters belonging to another distribution.
 /// The editor supplies those defaults only when that distribution is selected.
@@ -65,9 +103,20 @@ fn input_parameters(ui: &mut egui::Ui, values: &mut Map<String, Json>) {
     });
 }
 
+/// Keeps the nested input in sync while its reference box is drawn in collapsed mode.
+pub(super) fn sync_collapsed_input(d: &mut Dialog, key: &str) {
+    let Some(index) = key.strip_prefix("monteCarloInput").and_then(|n| n.parse::<usize>().ok()) else { return };
+    let Some(cell) = d.values.get(key).cloned() else { return };
+    if let Some(input) =
+        d.values.get_mut("inputs").and_then(Json::as_array_mut).and_then(|inputs| inputs.get_mut(index)).and_then(Json::as_object_mut)
+    {
+        input.insert("cell".into(), cell);
+    }
+}
+
 /// Draws the bounded input editor, sampling settings, matrix and outputs without evaluating
 /// formulas. Replica settings apply only to LHS; confirmation delegates validation to the engine.
-pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+pub(super) fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     ui.label(
         "Choose numeric input cells and formula outputs. Source values are kept unchanged; optional correlation is on latent Gaussian variables.",
     );
@@ -80,7 +129,15 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
                 ui.group(|ui| {
                     if let Some(values) = item.as_object_mut() {
                         ui.horizontal(|ui| {
-                            text(ui, values, "cell", "Cell:");
+                            let key = format!("monteCarloInput{index}");
+                            if d.refs.target.as_deref() != Some(&key) {
+                                d.values.insert(key.clone(), values.get("cell").cloned().unwrap_or(json!("")));
+                            }
+                            let label = ui.label("Cell:");
+                            ref_edit(app, ui, d, &key, RefLabel::By(label.id), 140.0);
+                            if let Some(value) = d.values.get(&key) {
+                                values.insert("cell".into(), value.clone());
+                            }
                             let mut kind = values.get("distribution").and_then(Json::as_str).unwrap_or("uniform").to_string();
                             let label = ui.label("Distribution:");
                             craft_ui::ComboBox::from_id_salt("distribution")
@@ -105,6 +162,8 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
     });
     if let Some(i) = remove {
         inputs.remove(i);
+        d.refs.target = None;
+        d.refs.collapsed = None;
     }
     if inputs.len() < 32 && ui.button("Add input").clicked() {
         inputs.push(input_template(""));
@@ -169,6 +228,7 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
 /// output references stay line-delimited and correlation rows preserve invalid numeric tokens.
 pub(super) fn params(d: &Dialog) -> Json {
     let mut values = d.values.clone();
+    values.retain(|key, _| !key.starts_with("monteCarloInput"));
     if values.get("method").and_then(Json::as_str) != Some("latinHypercube") {
         values.remove("replicates");
     }
@@ -218,15 +278,66 @@ pub(super) fn params(d: &Dialog) -> Json {
 mod tests {
     use super::*;
 
+    /// A report can be reopened, edited and run again without overwriting the original report.
+    #[test]
+    fn monte_carlo_report_configuration_can_be_edited_and_rerun() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.execute("cell.set", json!({"cell":"A1","input":"2"})).unwrap();
+        session.execute("cell.set", json!({"cell":"B1","input":"=A1*2"})).unwrap();
+        let config =
+            json!({"inputs":[{"cell":"A1","distribution":"uniform","min":1,"max":3}],"outputs":["B1"],"iterations":32,"seed":42,"samples":false});
+        let original = session.execute("data.monteCarlo", config).unwrap();
+        let mut app = crate::SheetApp::new(session, Default::default());
+        let mut dialog = Dialog::open(&mut app, "monteCarlo", json!({})).unwrap();
+        assert_eq!(dialog.title, "Edit Monte Carlo Simulation");
+        assert!(dialog.values["outputs"].as_str().unwrap().contains('!'));
+        dialog.values.insert("iterations".into(), json!("48"));
+        let rerun = app.session.execute("data.monteCarlo", params(&dialog)).unwrap();
+        assert_eq!(rerun["iterations"], 48);
+        assert_ne!(original["sheet"], rerun["sheet"]);
+        assert!(app.session.active().unwrap().wb.sheet_index(original["sheet"].as_str().unwrap()).is_some());
+    }
+
+    /// Malformed reports cannot silently turn into an unrelated default simulation.
+    #[test]
+    fn monte_carlo_invalid_saved_configuration_is_rejected() {
+        let mut sheet = gridcraft_engine::model::Sheet::new("report");
+        use gridcraft_engine::core::{CellRef, Value};
+        assert!(saved_configuration(&sheet).is_none());
+        sheet.set_value(CellRef::new(0, 0), Value::text("Monte Carlo simulation"));
+        sheet.set_value(CellRef::new(3, 0), Value::text("Reusable configuration (JSON)"));
+        sheet.set_value(CellRef::new(3, 1), Value::text("not json"));
+        assert!(saved_configuration(&sheet).unwrap().is_err());
+    }
+
+    /// Unqualified inputs stay tied to the sheet where the dialog was opened.
+    #[test]
+    fn monte_carlo_dialog_returns_to_its_opening_sheet() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.execute("home.insertSheet", json!({})).unwrap();
+        session.execute("sheet.activate", json!({"sheet":0})).unwrap();
+        let mut app = crate::SheetApp::new(session, Default::default());
+        let original = app.session.active().unwrap().wb.active_sheet();
+        let mut dialog = Dialog::open(&mut app, "monteCarlo", json!({})).unwrap();
+        app.session.execute("sheet.activate", json!({"sheet":1})).unwrap();
+        dialog.end_pick(&mut app).unwrap();
+        assert_eq!(app.session.active().unwrap().wb.active_sheet(), original);
+    }
+
     /// Adding an input and then selecting a distribution supplies its own untouched defaults.
     #[test]
     fn monte_carlo_added_inputs_use_distribution_defaults_without_overwriting_edits() {
         use egui_kittest::kittest::Queryable as _;
         for (kind, mean) in [("lognormal", 1.0), ("poisson", 10.0)] {
+            let mut session = gridcraft_engine::Session::new();
+            session.new_workbook();
+            let app = SheetApp::new(session, Default::default());
             let d = Dialog::custom("monteCarlo", "Monte Carlo", json!({"inputs":[input_template("A1")],"method":"random"}));
             let mut h = egui_kittest::Harness::builder()
                 .with_size(egui::vec2(1000.0, 1000.0))
-                .build_ui_state(|ui, d: &mut Dialog| form(ui, d, &mut false, &mut true), d);
+                .build_ui_state(|ui, d: &mut Dialog| form(&app, ui, d, &mut false, &mut true), d);
             h.run_steps(2);
             h.get_by_label("Add input").click();
             h.run_steps(2);

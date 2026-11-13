@@ -5,8 +5,8 @@
   "firstStableVersion": null,
   "upstream": {
     "name": "GridCraft",
-    "version": "0.15.0",
-    "commit": "30b210b4ef03b30616923465efa70766cefba379",
+    "version": "0.19.1",
+    "commit": "c0ee120ac2d9b59630f5abf1151dd9b471fe2926",
     "repository": "https://github.com/storytold/gridcraft"
   },
   "publisher": "DisHub",

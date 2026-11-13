@@ -40,6 +40,7 @@ pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_te
 pub use gridcraft_calc as calc;
 pub use gridcraft_core as core;
 pub use gridcraft_formula as formula;
+pub use gridcraft_math as math;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
 pub use selection::Selection;
@@ -258,6 +259,22 @@ struct JournalBackup {
     sizes: Vec<usize>,
 }
 
+/// Comment and hyperlink text of a sheet: a changed sheet's snapshot keeps its own copy of these
+/// strings (an edit deep-copies them), so they count against the history budget with the cells.
+fn sheet_text_bytes(sheet: &gridcraft_model::Sheet) -> usize {
+    let comments = sheet.comments.values().fold(0usize, |sum, c| {
+        // The vectors' own storage counts too: an empty reply still takes an element.
+        let replies = c.replies.iter().fold(0usize, |n, (a, t)| n.saturating_add(a.len()).saturating_add(t.len()));
+        let replies = replies.saturating_add(c.replies.capacity().saturating_mul(std::mem::size_of::<(String, String)>()));
+        let dates = c.dates.iter().fold(0usize, |n, d| n.saturating_add(d.len()));
+        let dates = dates.saturating_add(c.dates.capacity().saturating_mul(std::mem::size_of::<String>()));
+        sum.saturating_add(std::mem::size_of::<gridcraft_model::Comment>() + c.author.len() + c.text.len() + replies + dates)
+    });
+    sheet.hyperlinks.values().fold(comments, |sum, h| {
+        sum.saturating_add(std::mem::size_of::<gridcraft_model::Hyperlink>() + h.target.len() + h.tooltip.as_ref().map_or(0, String::len))
+    })
+}
+
 fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
     let mut bytes = std::mem::size_of::<Workbook>();
     for (index, sheet) in older.sheets.iter().enumerate() {
@@ -269,6 +286,7 @@ fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
         let empty = gridcraft_model::CellStore::new();
         let next = newer.sheets.get(index).map_or(&empty, |next| &next.cells);
         bytes = bytes.saturating_add(sheet.cells.retained_bytes_against(next));
+        bytes = bytes.saturating_add(sheet_text_bytes(sheet));
     }
     // Snapshots share the macro list until a change to it; a snapshot with its own list keeps it.
     if !older.macros.shares(&newer.macros) {
@@ -326,7 +344,9 @@ impl DocState {
         calc.rebuild(&wb);
         Self::with_calc(wb, calc, path, title, trust)
     }
-    fn with_calc(wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
+    fn with_calc(mut wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
+        // Equations arrive without a layout (files never store one); painting reads only the cache.
+        wb.refresh_equations();
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
@@ -540,6 +560,9 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Whether `link.open` may open web and e-mail addresses without the user's confirmation
+    /// (#2181). Host code sets it; no command does.
+    pub link_policy: links::LinkPolicy,
     /// Open undo groups, innermost last.
     groups: Vec<OpenGroup>,
     next_group: u64,
@@ -783,7 +806,7 @@ impl Session {
                 // A toggle (Bold) is recorded with the state it set, as Excel records
                 // `Bold = True`: playing it back sets that state rather than flipping it again.
                 let params = match result {
-                    Ok(r) if params.is_object() => record::with_toggle_state(cmd::journal_params(params), r),
+                    Ok(r) if params.is_object() => record::with_toggle_state(id, cmd::journal_params(params), r),
                     _ => cmd::journal_params(params),
                 };
                 let kept = rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params });
@@ -834,6 +857,10 @@ impl Session {
             self.journal_rollback =
                 Some(JournalRollback { mark: self.journal.len(), bytes: self.journal_bytes, recording: self.recording, backup: None });
         }
+        // Opening can replace an untouched blank or add a document before the final inherited
+        // work check. Keep membership so a late refusal cannot publish a different window set.
+        let open_before =
+            (id == "file.open").then(|| (self.docs.clone(), self.windows.clone(), self.active, self.active_window, self.groups.clone()));
         let revision_before = self.active().map(|d| d.revision);
         let sheet_selections_before = self.active().map(|d| d.sheet_selections.clone());
         let analysis_job_before = self.analysis_job.as_ref().map(|job| job.id);
@@ -900,6 +927,13 @@ impl Session {
         let result = match guarded {
             Ok(r) => r,
             Err(failure) => {
+                if let Some((docs, windows, active, active_window, groups)) = open_before {
+                    self.docs = docs;
+                    self.windows = windows;
+                    self.active = active;
+                    self.active_window = active_window;
+                    self.groups = groups;
+                }
                 // Runtime state is not part of a workbook snapshot. A failed start may have
                 // retained a new job before an inherited policy refused the post-handler check.
                 let created_job = self.analysis_job.as_ref().map(|job| job.id) != analysis_job_before;

@@ -25,6 +25,9 @@ pub(crate) fn tick(app: &mut SheetApp, _ctx: &egui::Context) {
     }
 }
 
+/// Manual downloads do not schedule an in-process update.
+pub(crate) fn start_pending_update(_app: &mut SheetApp) {}
+
 /// There is no automatic-update prompt or close/restart action in this edition.
 pub(crate) fn show(_app: &mut SheetApp, _ctx: &egui::Context) {}
 

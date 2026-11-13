@@ -30,6 +30,7 @@ macro_rules! outln {
 }
 
 mod check;
+mod sandbox_check;
 
 use gridcraft_engine::Session;
 use serde_json::{Value, json};
@@ -62,11 +63,16 @@ fn stdout_failed(e: std::io::Error) -> ! {
 }
 
 fn main() -> ExitCode {
+    // A confined launcher run (and its probes) comes first, before anything else starts.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {
         Some("--version" | "-V" | "version") => {
-            outln!("dishub-calculo-cli {} (GridCraft base 0.15.0)", env!("CARGO_PKG_VERSION"));
+            outln!("dishub-calculo-cli {} (GridCraft base 0.19.1)", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some("--help" | "-h" | "help") => {
@@ -79,6 +85,7 @@ fn main() -> ExitCode {
         Some("cat") => cat(rest),
         Some("run") => run(rest),
         Some("check") => return check::main(rest),
+        Some("sandbox-check") => return sandbox_check::main(rest),
         Some("commands") => commands(rest),
         Some("functions") => functions(rest),
         Some("mcp") => mcp(rest),

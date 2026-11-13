@@ -10,7 +10,8 @@ or financial-model template is required.
 ## Configure a simulation
 
 1. Add each uncertain input cell. Use a sheet-qualified reference for another sheet, such as
-   `'Sales assumptions'!B2`. The input must be a numeric constant, not a formula.
+   `'Sales assumptions'!B2`, or use its reference picker to select a cell on the grid. The input
+   must be a numeric constant, not a formula.
 2. Choose a distribution: **uniform** (minimum/maximum), **triangular**
    (minimum/mode/maximum), **normal** (mean/standard deviation), **lognormal**
    (arithmetic mean/CV), **Poisson** (mean), **binomial** (trials/probability), or
@@ -26,7 +27,7 @@ or financial-model template is required.
 5. Optionally enter a correlation matrix: rows on separate lines, numbers separated by spaces.
    The matrix follows input order and specifies **latent Gaussian correlation**, not the
    Pearson correlation of non-normal sampled variables.
-6. Run. The dialog shows progress and **Cancel simulation** (also Escape). The source inputs
+6. Run. A centered dialog shows progress and **Cancel simulation** (also Escape). The source inputs
    remain unchanged; adding the completed report is one undoable action. Workbook editing is
    disabled while a job is pending. In action recording or an undo group the dialog retains
    the synchronous command behavior.
@@ -40,6 +41,11 @@ convergence of the first output mean and its sampling-error interval.
 It also stores the canonical JSON configuration, with sheet-qualified references, so the model
 can be run again after reopening the workbook. This is not a live recalculating report: rerun
 after changing the model or the distributions.
+
+To edit a previous run, select its report sheet and open **Data → Monte Carlo**. The dialog
+loads the saved inputs, outputs and sampling settings; change them and run again to create a
+new report. The previous report remains unchanged. If the configuration in the report has
+been damaged, the dialog reports the problem instead of silently using new defaults.
 
 ## Programmatic example
 

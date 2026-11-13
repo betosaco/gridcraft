@@ -24,8 +24,8 @@ fn tmpdir(name: &str) -> PathBuf {
 
 #[test]
 fn version_and_usage() {
-    assert_eq!(ok(&["--version"]).trim(), format!("dishub-calculo-cli {} (GridCraft base 0.15.0)", env!("CARGO_PKG_VERSION")));
-    assert_eq!(ok(&["version"]).trim(), format!("dishub-calculo-cli {} (GridCraft base 0.15.0)", env!("CARGO_PKG_VERSION")));
+    assert_eq!(ok(&["--version"]).trim(), format!("dishub-calculo-cli {} (GridCraft base 0.19.1)", env!("CARGO_PKG_VERSION")));
+    assert_eq!(ok(&["version"]).trim(), format!("dishub-calculo-cli {} (GridCraft base 0.19.1)", env!("CARGO_PKG_VERSION")));
     let o = run(&["frobnicate"]);
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("unknown subcommand"));
@@ -202,6 +202,44 @@ fn check_reports_a_depth_limited_scan_while_checking_readable_files() {
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["totals"]["opened"], 1);
     assert!(report["files"].as_array().unwrap().iter().any(|r| r["error"].as_str().is_some_and(|e| e.contains("depth limit"))));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_past_the_depth_limit_is_still_scanned_when_named_as_an_input() {
+    let dir = tmpdir("check-depth-named");
+    // The first folder past the limit (33 levels down): the scan from the top reports it unreached.
+    let mut deep = dir.clone();
+    for _ in 0..33 {
+        deep.push("d");
+    }
+    std::fs::create_dir_all(&deep).unwrap();
+    ok(&["run", "--out", deep.join("deep.xlsx").to_str().unwrap(), "--quiet"]);
+    let out = run(&["check", dir.to_str().unwrap(), deep.to_str().unwrap(), "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // The first scan reports the subtree it could not reach; the named directory is checked.
+    assert_eq!(report["totals"]["opened"], 1, "{report}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_first_reached_at_the_depth_limit_is_completed_when_named_as_an_input() {
+    let dir = tmpdir("check-depth-shallower");
+    // The 32nd folder is scanned from the top, but its child (and the workbook in it) is past the limit.
+    let mut limit = dir.clone();
+    for _ in 0..32 {
+        limit.push("d");
+    }
+    let child = limit.join("c");
+    std::fs::create_dir_all(&child).unwrap();
+    ok(&["run", "--out", limit.join("at_limit.xlsx").to_str().unwrap(), "--quiet"]);
+    ok(&["run", "--out", child.join("below.xlsx").to_str().unwrap(), "--quiet"]);
+    let out = run(&["check", dir.to_str().unwrap(), limit.to_str().unwrap(), "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // Named from depth 0 the subtree is read: the workbook below the limit is checked, the one at it only once.
+    assert_eq!(report["totals"]["opened"], 2, "{report}");
     let _ = std::fs::remove_dir_all(dir);
 }
 

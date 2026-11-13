@@ -102,7 +102,7 @@ function Test-NativeCli([string] $Cli, [string] $Label, [string] $ExpectedVersio
     if (-not $versionProcess.WaitForExit(30000)) { $versionProcess.Kill($true); $versionProcess.WaitForExit(); throw 'CLI version command timed out.' }
     $versionText = $versionOut.Result.Trim()
     Assert-True ($versionProcess.ExitCode -eq 0) "CLI version command failed: $($versionErr.Result)"
-    Assert-True ($versionText -eq "dishub-calculo-cli $ExpectedVersion (GridCraft base 0.15.0)") 'CLI name/version/base identity does not match this edition.'
+    Assert-True ($versionText -eq "dishub-calculo-cli $ExpectedVersion (GridCraft base 0.19.1)") 'CLI name/version/base identity does not match this edition.'
   } finally { $versionProcess.Dispose() }
   $start = [Diagnostics.ProcessStartInfo]::new()
   $start.FileName = $Cli

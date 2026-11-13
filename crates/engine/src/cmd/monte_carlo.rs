@@ -416,7 +416,10 @@ impl Job {
                 return Err(bad(CMD, "input cells must be unique"));
             }
             let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-            if sh.cell(cell).is_some_and(|c| c.formula.is_some()) || !matches!(sh.value(cell),Value::Number(n) if n.is_finite()) {
+            if sh.spill_anchor(cell).is_some()
+                || sh.cell(cell).is_some_and(|c| c.formula.is_some() || c.py.is_some())
+                || !matches!(sh.value(cell),Value::Number(n) if n.is_finite())
+            {
                 return Err(bad(CMD, format!("input `{label}` must be a numeric constant")));
             }
             inputs.push(Input { sheet, cell, label, distribution: Distribution::parse(item)? });
@@ -475,13 +478,17 @@ impl Job {
             .saturating_mul((width as u64).saturating_mul(logarithm).saturating_add(dimensions.saturating_mul(dimensions).saturating_mul(4)))
             .saturating_add(report_work)
             .saturating_add(d.calc.formula_count() as u64);
-        let trial_work = d.calc.formula_count().saturating_add(inputs.len()).saturating_add(outputs.len()).saturating_add(1) as u64;
+        let mut trial = Trial::new(d);
+        trial.meter.set_limit(work_limit)?;
+        if d.wb.calc.mode != gridcraft_model::CalcMode::Automatic {
+            trial.refresh_baseline()?;
+        }
+        let trial_work = (d.calc.formula_count().saturating_add(inputs.len()).saturating_add(outputs.len()).saturating_add(1) as u64)
+            .saturating_add(trial.spill_copy_work());
         let estimate = sample_work.saturating_add(finish_work).saturating_add(trial_work.saturating_mul(iterations as u64));
         if estimate > work_limit {
             return Err(bad(CMD, format!("estimated analysis work {estimate} exceeds maxWork {work_limit}; reduce model size/iterations")));
         }
-        let trial = Trial::new(d);
-        trial.meter.set_limit(work_limit)?;
         Ok(Self {
             id: 0,
             auto_advance: false,
@@ -522,7 +529,11 @@ impl Job {
 
     /// Canonical synchronous parameters for journal replay without ephemeral job identities.
     pub fn configuration(&self) -> Json {
-        self.config.clone()
+        let mut config = self.config.clone();
+        if let Some(object) = config.as_object_mut() {
+            object.insert("newSheet".into(), json!(self.name));
+        }
+        config
     }
 
     /// Reports progress without publishing results or claiming that sampling is business certainty.
@@ -730,12 +741,16 @@ struct Report<'a> {
 /// parameters; the original model's input values and formulas are preserved.
 fn write_report(s: &mut Session, report: Report<'_>) -> Result<()> {
     let Report { name, config, seed, iterations, keep_samples, inputs, outputs, xs, ys, summaries, sensitivity, diagnostics, stochastic } = report;
-    let chart_id = s.doc()?.wb.next_object_id();
+    let chart_ids = s.doc()?.wb.free_object_ids(2);
+    let [chart_id, convergence_id] = chart_ids.as_slice() else {
+        return Err(EngineError::Other("Cannot allocate report chart IDs.".into()));
+    };
+    let (chart_id, convergence_id) = (*chart_id, *convergence_id);
     let si = edit(s, |cx| {
         let mut sheet = Sheet::new(name.to_string());
         let bold = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.font.bold = true);
         let mut put = |r: u32, c: u32, v: Value, style: StyleId| {
-            sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style });
+            sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style, py: None });
         };
         put(0, 0, Value::text("Monte Carlo simulation"), bold);
         put(
@@ -843,6 +858,9 @@ fn write_report(s: &mut Session, report: Report<'_>) -> Result<()> {
             source: None,
             by_rows: false,
             pivot: None,
+            data_table: None,
+            hole_size: 75,
+            first_slice_angle: 0,
         });
         let trace_series = [(2, "Mean"), (4, "Mean CI95 lower"), (5, "Mean CI95 upper")]
             .into_iter()
@@ -857,7 +875,7 @@ fn write_report(s: &mut Session, report: Report<'_>) -> Result<()> {
             })
             .collect();
         sheet.charts.push(Chart {
-            id: chart_id.saturating_add(1),
+            id: convergence_id,
             kind: ChartKind::LineMarkers,
             anchor: Anchor { cell: CellRef::new(helper + sensitivity.len() as u32 + 5, 12), width: 640.0, height: 360.0, ..Default::default() },
             title: Some("Mean convergence and 95% sampling-error interval".into()),
@@ -871,6 +889,9 @@ fn write_report(s: &mut Session, report: Report<'_>) -> Result<()> {
             source: None,
             by_rows: false,
             pivot: None,
+            data_table: None,
+            hole_size: 75,
+            first_slice_angle: 0,
         });
         for col in 0..15 {
             sheet.cols.insert(col, gridcraft_model::LineInfo { size: Some(if col == 0 || col == 12 { 180.0 } else { 140.0 }), ..Default::default() });
