@@ -157,7 +157,12 @@ ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG" "$WORK/raw.dmg"
 # makehybrid's synthesized HFS FinderInfo invalidates sealed app resources after mounting.
 # APFS preserves the signed bundle metadata and is supported by the macOS 11 minimum target.
-hdiutil create -srcfolder "$STAGE" -fs APFS -format UDZO -imagekey zlib-level=9 -volname "DisHub Cálculo" "$DMG"
+# APFS metadata and signing overhead can exceed hdiutil's automatic srcfolder estimate.
+# Reserve a 128 MiB margin so the signed app fits, with a 256 MiB minimum image size.
+stage_kib=$(du -sk "$STAGE" | awk '{print $1}')
+image_mib=$(( (stage_kib + 1023) / 1024 + 128 ))
+if (( image_mib < 256 )); then image_mib=256; fi
+hdiutil create -size "${image_mib}m" -srcfolder "$STAGE" -fs APFS -format UDZO -imagekey zlib-level=9 -volname "DisHub Cálculo" "$DMG"
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 if [[ "$NOTARIZE" = 1 ]]; then
